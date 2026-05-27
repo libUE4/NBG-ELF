@@ -13,32 +13,32 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0xef0
-	stubHoneypotEntryOff    = 0x10cc
-	stubAnchorOff           = 0x1168
-	stubStaticVAOff         = 0x1170
-	stubOrigEntryOff        = 0x1178
-	stubPageVAOff           = 0x1180
-	stubPageLenOff          = 0x1188
-	stubPayloadLenOff       = 0x1190
-	stubEntryCountOff       = 0x1198
-	stubGuardSeedOff        = 0x119c
-	stubTableSeedOff        = 0x11a0
-	stubKeySeedOff          = 0x11a4
-	stubParamTableAOff      = 0x11a8
-	stubParamTableBOff      = 0x11ac
-	stubParamKeyIndexOff    = 0x11b0
-	stubParamStringPosOff   = 0x11b4
-	stubParamStringIndexOff = 0x11b8
-	stubGuardHashOff        = 0x11bc
-	stubOrigEntryKeyOff     = 0x11c0
-	stubTableOff            = 0x11c8
+	stubLazyEntryOff        = 0xf3c
+	stubHoneypotEntryOff    = 0x11b8
+	stubAnchorOff           = 0x1258
+	stubStaticVAOff         = 0x1260
+	stubOrigEntryOff        = 0x1268
+	stubPageVAOff           = 0x1270
+	stubPageLenOff          = 0x1278
+	stubPayloadLenOff       = 0x1280
+	stubEntryCountOff       = 0x1288
+	stubGuardSeedOff        = 0x128c
+	stubTableSeedOff        = 0x1290
+	stubKeySeedOff          = 0x1294
+	stubParamTableAOff      = 0x1298
+	stubParamTableBOff      = 0x129c
+	stubParamKeyIndexOff    = 0x12a0
+	stubParamStringPosOff   = 0x12a4
+	stubParamStringIndexOff = 0x12a8
+	stubGuardHashOff        = 0x12ac
+	stubOrigEntryKeyOff     = 0x12b0
+	stubTableOff            = 0x12b8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x11e0
-	stubLazyTableOff        = 0x11e8
+	stubLazyCountOff        = 0x12d0
+	stubLazyTableOff        = 0x12d8
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb88
-	stubDataEndOff          = 0x1238
+	stubDataEndOff          = 0x1328
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -997,8 +997,15 @@ func cryptRuntimeString(buf []byte, va uint64, index uint32, key, posParam, inde
 		if variant&0x08 != 0 {
 			mask ^= state >> 11
 		}
+		mask ^= runtimeStringHardMask(state, va, uint32(pos), saltA, saltB)
 		buf[pos] ^= byte(mask)
 	}
+}
+
+func runtimeStringHardMask(state uint32, va uint64, pos, saltA, saltB uint32) uint32 {
+	mask := state ^ (pos*0x27d4eb2d + saltA) ^ uint32(va>>16) ^ saltB ^ ((pos + 1) * 0x165667b1)
+	mask = mixXorShift32(mask)
+	return (mask ^ (mask >> 16)) + (state << 3)
 }
 
 func computeRuntimeGuardHash(code []byte, seed uint32) uint32 {

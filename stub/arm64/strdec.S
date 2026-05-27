@@ -980,6 +980,25 @@ strdec_entry:
     tbz w16, #3, 16f
     eor w5, w5, w28, lsr #11
 16:
+    mov w6, #0xeb2d
+    movk w6, #0x27d4, lsl #16
+    mul w6, w3, w6
+    add w6, w6, w15
+    eor w6, w6, w28
+    lsr x8, x7, #16
+    eor w6, w6, w8
+    eor w6, w6, w17
+    mov w8, #0x67b1
+    movk w8, #0x1656, lsl #16
+    add w27, w3, #1
+    mul w8, w27, w8
+    eor w6, w6, w8
+    eor w6, w6, w6, lsl #13
+    eor w6, w6, w6, lsr #17
+    eor w6, w6, w6, lsl #5
+    eor w8, w6, w6, lsr #16
+    add w6, w8, w28, lsl #3
+    eor w5, w5, w6
     eor w4, w4, w5
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1200,6 +1219,25 @@ strdec_lazy_entry:
     tbz w9, #3, .Llazy_v3
     eor w6, w6, w11, lsr #11
 .Llazy_v3:
+    mov w16, #0xeb2d
+    movk w16, #0x27d4, lsl #16
+    mul w16, w3, w16
+    add w16, w16, w14
+    eor w16, w16, w11
+    lsr x17, x7, #16
+    eor w16, w16, w17
+    eor w16, w16, w15
+    mov w17, #0x67b1
+    movk w17, #0x1656, lsl #16
+    add w18, w3, #1
+    mul w17, w18, w17
+    eor w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    eor w17, w16, w16, lsr #16
+    add w16, w17, w11, lsl #3
+    eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1249,6 +1287,25 @@ strdec_lazy_entry:
     tbz w9, #3, .Llazy_e3
     eor w6, w6, w11, lsr #11
 .Llazy_e3:
+    mov w16, #0xeb2d
+    movk w16, #0x27d4, lsl #16
+    mul w16, w3, w16
+    add w16, w16, w14
+    eor w16, w16, w11
+    lsr x17, x7, #16
+    eor w16, w16, w17
+    eor w16, w16, w15
+    mov w17, #0x67b1
+    movk w17, #0x1656, lsl #16
+    add w18, w3, #1
+    mul w17, w18, w17
+    eor w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    eor w17, w16, w16, lsr #16
+    add w16, w17, w11, lsl #3
+    eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]
     add w3, w3, #1

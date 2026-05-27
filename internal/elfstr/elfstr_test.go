@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,6 +24,57 @@ func TestRuntimeStringCryptRoundTrip(t *testing.T) {
 	cryptRuntimeString(buf, 0x123450, 7, 0x11223344, 0x9d, 0x7b, 0x13572468, 0x24681357, 3)
 	if !bytes.Equal(buf, plain) {
 		t.Fatalf("round-trip mismatch")
+	}
+}
+
+func TestRuntimeStringCryptUsesHardMaskLayer(t *testing.T) {
+	plain := []byte("commercial protection string fixture")
+	hardened := append([]byte(nil), plain...)
+	legacy := append([]byte(nil), plain...)
+	va := uint64(0x123450)
+	index := uint32(7)
+	key := uint32(0x11223344)
+	posParam := uint32(0x9d)
+	indexParam := uint32(0x7b)
+	saltA := uint32(0x13572468)
+	saltB := uint32(0x24681357)
+	variant := uint8(0x0f)
+
+	cryptRuntimeString(hardened, va, index, key, posParam, indexParam, saltA, saltB, variant)
+	cryptRuntimeStringLegacyForTest(legacy, va, index, key, posParam, indexParam, saltA, saltB, variant)
+	if bytes.Equal(hardened, legacy) {
+		t.Fatalf("hardened encryption matched legacy single-layer stream")
+	}
+	if bytes.Equal(hardened, plain) {
+		t.Fatalf("hardened encryption did not change plaintext")
+	}
+	cryptRuntimeString(hardened, va, index, key, posParam, indexParam, saltA, saltB, variant)
+	if !bytes.Equal(hardened, plain) {
+		t.Fatalf("hardened encryption failed round trip")
+	}
+}
+
+func cryptRuntimeStringLegacyForTest(buf []byte, va uint64, index uint32, key, posParam, indexParam, saltA, saltB uint32, variant uint8) {
+	state := key ^ uint32(va) ^ uint32(va>>32) ^ uint32(len(buf)) ^ (index * indexParam) ^ posParam ^ saltA ^ saltB ^ uint32(variant&0x0f)
+	for pos := range buf {
+		state += posParam
+		state += saltB
+		state ^= uint32(pos)*indexParam + saltA
+		state = mixXorShift32(state)
+		mask := state + uint32(pos)*posParam + uint32(va>>4)
+		if variant&0x01 != 0 {
+			mask ^= state >> 8
+		}
+		if variant&0x02 != 0 {
+			mask ^= saltB
+		}
+		if variant&0x04 != 0 {
+			mask ^= state << 7
+		}
+		if variant&0x08 != 0 {
+			mask ^= state >> 11
+		}
+		buf[pos] ^= byte(mask)
 	}
 }
 
@@ -942,9 +995,10 @@ func TestManifestSelfHashDetectsMetadataTamper(t *testing.T) {
 }
 
 func TestStubSymbolOffsetsMatchRuntimeConstants(t *testing.T) {
-	f, err := elf.Open("../../build/stub/strdec.elf")
+	stubPath := buildCurrentStubELFForTest(t)
+	f, err := elf.Open(stubPath)
 	if err != nil {
-		t.Skipf("stub ELF not available; rebuild stub to enable symbol offset check: %v", err)
+		t.Fatalf("open generated stub ELF: %v", err)
 	}
 	defer f.Close()
 	syms, err := f.Symbols()
@@ -991,6 +1045,28 @@ func TestStubSymbolOffsetsMatchRuntimeConstants(t *testing.T) {
 			t.Fatalf("stub symbol %s offset got %#x want %#x", tc.name, got, tc.want)
 		}
 	}
+}
+
+func buildCurrentStubELFForTest(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("aarch64-linux-gnu-as"); err != nil {
+		t.Skipf("aarch64 assembler not available: %v", err)
+	}
+	if _, err := exec.LookPath("aarch64-linux-gnu-ld"); err != nil {
+		t.Skipf("aarch64 linker not available: %v", err)
+	}
+	dir := t.TempDir()
+	objPath := filepath.Join(dir, "strdec.o")
+	elfPath := filepath.Join(dir, "strdec.elf")
+	srcPath := filepath.Join("..", "..", "stub", "arm64", "strdec.S")
+	ldsPath := filepath.Join("..", "..", "stub", "arm64", "strdec.lds")
+	if out, err := exec.Command("aarch64-linux-gnu-as", "-o", objPath, srcPath).CombinedOutput(); err != nil {
+		t.Fatalf("assemble stub: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("aarch64-linux-gnu-ld", "-T", ldsPath, "-o", elfPath, objPath).CombinedOutput(); err != nil {
+		t.Fatalf("link stub: %v\n%s", err, out)
+	}
+	return elfPath
 }
 
 func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
