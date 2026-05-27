@@ -915,6 +915,11 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	binary.LittleEndian.PutUint16(data[0x36:], 56)
 	binary.LittleEndian.PutUint16(data[0x38:], 1)
 	writePhdr64(data, 0x40, elf64Phdr{Type: ptLoad, Flags: pfR | pfW | pfX, Off: 0, Vaddr: 0x100000, Paddr: 0x100000, Filesz: uint64(len(data)), Memsz: uint64(len(data)), Align: 0x1000})
+	bl, ok := encodeAArch64BL(0x100100, 0x100000+stubLazyEntryOff)
+	if !ok {
+		t.Fatalf("encode lazy BL failed")
+	}
+	binary.LittleEndian.PutUint32(data[0x100:], bl)
 	de := LazyDispatchEntry{
 		TextVA:     0x100100,
 		StringVA:   0x200200,
@@ -952,6 +957,12 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	corruptPad[base+41] = 0xff
 	if err := validateInjectedOutputLazyDispatch(corruptPad); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
+	}
+
+	corruptCallsite := append([]byte(nil), out...)
+	binary.LittleEndian.PutUint32(corruptCallsite[0x100:], 0xd503201f)
+	if err := validateInjectedOutputLazyDispatch(corruptCallsite); err == nil {
+		t.Fatalf("accepted lazy dispatch entry with unpatched callsite")
 	}
 }
 
