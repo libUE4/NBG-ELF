@@ -62,6 +62,7 @@ func runEncrypt(args []string) {
 	fs := flag.NewFlagSet("encrypt", flag.ExitOnError)
 	out := fs.String("o", "", "输出 ELF 路径（默认: 工具目录/basename.vmp）")
 	manifest := fs.String("manifest", "", "manifest 输出路径")
+	auditPath := fs.String("audit", "", "生成后输出 JSON 审计报告路径")
 	preset := fs.String("preset", elfstr.PresetBalanced, "保护预设: safe, balanced, aggressive")
 	configPath := fs.String("config", "", "JSON 保护配置路径")
 	reportOnly := fs.Bool("report", false, "只打印保护计划，不写入输出文件")
@@ -133,12 +134,20 @@ func runEncrypt(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	if *minGrade != "" {
+	if *minGrade != "" || *auditPath != "" {
 		audit := buildManifestAudit(manifestPath, m)
+		if *auditPath != "" {
+			if err := writeJSONFile(*auditPath, audit, 0o644); err != nil {
+				fatal(err)
+			}
+			fmt.Printf("[+] 审计报告: %s\n", *auditPath)
+		}
 		if err := enforceMinimumAuditGrade(audit, *minGrade); err != nil {
 			fatal(err)
 		}
-		fmt.Printf("[+] 审计等级: %s score=%d\n", audit.Summary.Grade, audit.Summary.Score)
+		if *minGrade != "" {
+			fmt.Printf("[+] 审计等级: %s score=%d\n", audit.Summary.Grade, audit.Summary.Score)
+		}
 	}
 	fmt.Printf("[+] 已加密字符串: %d (%d 字节)\n", m.EntryCount, m.EncryptedSize)
 	fmt.Printf("[+] 保护预设: %s 控制流等级=%d 失败策略=%s\n", m.Report.Preset, m.Report.ControlFlowLevel, m.Report.FailurePolicy)
@@ -194,6 +203,18 @@ func printProtectionReportJSON(report *elfstr.ProtectionReport) {
 		fatal(err)
 	}
 	fmt.Println(string(raw))
+}
+
+func writeJSONFile(path string, value any, perm os.FileMode) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, perm)
 }
 
 type manifestAudit struct {
@@ -604,12 +625,12 @@ func usage() {
 
 命令:
   inspect [选项] <input.elf>
-  encrypt [-preset safe|balanced|aggressive] [-min-grade hardened|commercial-ready] [选项] <input.elf>
+  encrypt [-preset safe|balanced|aggressive] [-audit audit.json] [-min-grade hardened|commercial-ready] [选项] <input.elf>
   manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>
   verify [-min-grade hardened|commercial-ready] <manifest.json>
 
 说明:
-  encrypt -report -json 会以机器可读 JSON 输出保护计划；encrypt -min-grade 会在生成后执行审计门禁。
+  encrypt -report -json 会以机器可读 JSON 输出保护计划；encrypt -audit/-min-grade 会在生成后执行审计。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
   manifest 会打印保护元数据、审计评分，并在输出文件可访问时校验 output_sha256。
   verify 等价于 manifest -strict。`)

@@ -94,6 +94,39 @@ func TestValidateEncryptReportFlagsRejectsJSONWithoutReport(t *testing.T) {
 	}
 }
 
+func TestWriteJSONFileCreatesParentAndWritesIndentedJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "audit.json")
+	audit := manifestAudit{
+		Schema: "test",
+		Summary: auditSummary{
+			Grade: "hardened",
+			Score: 88,
+		},
+		Checks: []auditCheck{{Name: "manifest_sha256", Status: "ok"}},
+	}
+	if err := writeJSONFile(path, audit, 0o644); err != nil {
+		t.Fatalf("write json file: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read json file: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal audit json: %v", err)
+	}
+	if _, ok := decoded["summary"]; !ok {
+		t.Fatalf("audit json missing summary: %s", raw)
+	}
+	if _, ok := decoded["checks"]; !ok {
+		t.Fatalf("audit json missing checks: %s", raw)
+	}
+	if raw[len(raw)-1] != '\n' {
+		t.Fatalf("audit json should end with newline")
+	}
+}
+
 func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "out.manifest.json")
