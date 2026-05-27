@@ -308,6 +308,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_stub", Status: "ok", Detail: m.RuntimeStub.SHA256})
 	}
+	appendFileSHA256Check(&audit, "input_sha256", inputPath, m.InputSHA256)
 	raw, err := os.ReadFile(outputPath)
 	if err != nil {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "unavailable", Detail: err.Error()})
@@ -359,6 +360,21 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		}
 	}
 	return finalizeManifestAudit(audit, m)
+}
+
+func appendFileSHA256Check(audit *manifestAudit, name, path, want string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: name, Status: "unavailable", Detail: err.Error()})
+		return
+	}
+	sum := sha256.Sum256(raw)
+	got := hex.EncodeToString(sum[:])
+	if want != "" && got != want {
+		audit.Checks = append(audit.Checks, auditCheck{Name: name, Status: "mismatch", Detail: got})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: name, Status: "ok", Detail: got})
+	}
 }
 
 func finalizeManifestAudit(audit manifestAudit, m *elfstr.Manifest) manifestAudit {
@@ -516,6 +532,7 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 func printAuditCheck(check auditCheck) {
 	labels := map[string]string{
 		"manifest_sha256":  "manifest_sha256",
+		"input_sha256":     "输入_sha256",
 		"output_sha256":    "输出_sha256",
 		"output_structure": "输出结构",
 		"runtime_stub":     "运行时_stub",
@@ -530,7 +547,7 @@ func printAuditCheck(check auditCheck) {
 	}
 	switch check.Status {
 	case "ok":
-		if (check.Name == "output_sha256" || check.Name == "manifest_sha256") && check.Detail != "" {
+		if (check.Name == "input_sha256" || check.Name == "output_sha256" || check.Name == "manifest_sha256") && check.Detail != "" {
 			fmt.Printf("%s: %s (ok)\n", label, check.Detail)
 		} else {
 			fmt.Printf("%s: ok\n", label)

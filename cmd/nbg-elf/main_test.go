@@ -159,6 +159,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["manifest_sha256"].Status != "unavailable" {
 		t.Fatalf("manifest_sha256 check = %+v", checks["manifest_sha256"])
 	}
+	if checks["input_sha256"].Status != "unavailable" {
+		t.Fatalf("input_sha256 check = %+v", checks["input_sha256"])
+	}
 	if checks["runtime_stub"].Status != "invalid" {
 		t.Fatalf("runtime_stub check = %+v", checks["runtime_stub"])
 	}
@@ -190,6 +193,37 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	}
 	if _, ok := decoded["capabilities"]; !ok {
 		t.Fatalf("audit json missing capabilities: %s", raw)
+	}
+}
+
+func TestBuildManifestAuditValidatesInputSHA256(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.elf")
+	if err := os.WriteFile(inputPath, []byte("source artifact"), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	m := &elfstr.Manifest{
+		Schema:      elfstr.Schema,
+		InputPath:   inputPath,
+		OutputPath:  "missing-output.vmp",
+		InputSHA256: "wrong",
+	}
+	audit := buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m)
+	checks := map[string]auditCheck{}
+	for _, check := range audit.Checks {
+		checks[check.Name] = check
+	}
+	if checks["input_sha256"].Status != "mismatch" {
+		t.Fatalf("input_sha256 mismatch check = %+v", checks["input_sha256"])
+	}
+	m.InputSHA256 = checks["input_sha256"].Detail
+	audit = buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m)
+	checks = map[string]auditCheck{}
+	for _, check := range audit.Checks {
+		checks[check.Name] = check
+	}
+	if checks["input_sha256"].Status != "ok" {
+		t.Fatalf("input_sha256 ok check = %+v", checks["input_sha256"])
 	}
 }
 
@@ -230,6 +264,7 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
@@ -293,6 +328,7 @@ func TestBuildAuditSummaryBlocksInvalidChecks(t *testing.T) {
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "invalid"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 		},
@@ -315,6 +351,7 @@ func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *test
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
