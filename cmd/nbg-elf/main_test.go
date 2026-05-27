@@ -126,6 +126,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
 	}
+	if audit.Summary.Grade != "blocked" || len(audit.Summary.Blockers) == 0 {
+		t.Fatalf("audit summary = %+v", audit.Summary)
+	}
 	raw, err := json.Marshal(audit)
 	if err != nil {
 		t.Fatalf("marshal audit: %v", err)
@@ -136,6 +139,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	}
 	if _, ok := decoded["checks"]; !ok {
 		t.Fatalf("audit json missing checks: %s", raw)
+	}
+	if _, ok := decoded["summary"]; !ok {
+		t.Fatalf("audit json missing summary: %s", raw)
 	}
 }
 
@@ -168,6 +174,86 @@ func TestBuildManifestAuditValidatesManifestSelfHash(t *testing.T) {
 	}
 	if checks["manifest_sha256"].Status != "invalid" {
 		t.Fatalf("manifest_sha256 tamper check = %+v", checks["manifest_sha256"])
+	}
+}
+
+func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "opaque-branches-per-entry-loop; runtime-state-dispatch; aarch64-callsite-lazy-decrypt",
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade != "commercial-ready" || summary.Score < 90 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if len(summary.Blockers) != 0 {
+		t.Fatalf("unexpected blockers: %+v", summary.Blockers)
+	}
+}
+
+func TestBuildAuditSummaryBlocksInvalidChecks(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "invalid"},
+			{Name: "output_sha256", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 1,
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck: true,
+			ControlFlow:      "runtime-state-dispatch",
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade != "blocked" || len(summary.Blockers) == 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 2,
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetBalanced,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck: true,
+			ControlFlow:      "opaque-branches-per-entry-loop; runtime-state-dispatch",
+			CallsiteMode:     "aarch64-lazy-dry-run-no-patch",
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("dry-run summary should not be commercial-ready: %+v", summary)
 	}
 }
 

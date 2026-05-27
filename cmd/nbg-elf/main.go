@@ -199,7 +199,15 @@ type manifestAudit struct {
 	Preset         string       `json:"preset,omitempty"`
 	ControlFlow    string       `json:"control_flow,omitempty"`
 	CallsiteMode   string       `json:"callsite_mode,omitempty"`
+	Summary        auditSummary `json:"summary"`
 	Checks         []auditCheck `json:"checks"`
+}
+
+type auditSummary struct {
+	Grade           string   `json:"grade"`
+	Score           int      `json:"score"`
+	Blockers        []string `json:"blockers,omitempty"`
+	Recommendations []string `json:"recommendations,omitempty"`
 }
 
 type auditCheck struct {
@@ -245,7 +253,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
 			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "skipped", Detail: "output unavailable"})
 		}
-		return audit
+		return finalizeManifestAudit(audit, m)
 	}
 	sum := sha256.Sum256(raw)
 	got := hex.EncodeToString(sum[:])
@@ -280,7 +288,103 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "ok"})
 		}
 	}
+	return finalizeManifestAudit(audit, m)
+}
+
+func finalizeManifestAudit(audit manifestAudit, m *elfstr.Manifest) manifestAudit {
+	audit.Summary = buildAuditSummary(audit, m)
 	return audit
+}
+
+func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
+	score := 100
+	var blockers []string
+	var recommendations []string
+	for _, check := range audit.Checks {
+		switch check.Status {
+		case "ok":
+		case "skipped":
+			if check.Name != "runtime_dispatch" {
+				score -= 5
+				recommendations = append(recommendations, check.Name+" skipped")
+			}
+		case "unavailable":
+			score -= 25
+			blockers = append(blockers, check.Name+" unavailable")
+		case "mismatch", "invalid":
+			score -= 35
+			blockers = append(blockers, check.Name+" "+check.Status)
+		default:
+			score -= 20
+			blockers = append(blockers, check.Name+" unknown-status")
+		}
+	}
+	switch m.Report.Preset {
+	case elfstr.PresetAggressive:
+		score += 5
+	case elfstr.PresetSafe:
+		score -= 10
+		recommendations = append(recommendations, "safe preset is for compatibility, not maximum protection")
+	}
+	if m.EntryCount == 0 {
+		score -= 20
+		blockers = append(blockers, "no protected entries")
+	}
+	if !m.Protection.RuntimeSelfCheck {
+		score -= 15
+		blockers = append(blockers, "runtime self-check disabled")
+	}
+	if m.Options.KeepSections {
+		score -= 10
+		recommendations = append(recommendations, "section table is preserved")
+	}
+	if m.Options.NoAntiFridaExtra {
+		score -= 10
+		recommendations = append(recommendations, "extra anti-frida probes disabled")
+	}
+	if m.Options.ManifestDetail {
+		score -= 5
+		recommendations = append(recommendations, "manifest detail exposes protected offsets")
+	}
+	if !strings.Contains(m.Protection.ControlFlow, "runtime-state-dispatch") {
+		score -= 8
+		recommendations = append(recommendations, "runtime state dispatch not enabled")
+	}
+	if m.Protection.CallsiteMode == "aarch64-lazy-decrypt-patch" && m.Protection.CallsiteLazySelected > 0 {
+		score += 5
+	} else if strings.Contains(m.Protection.CallsiteMode, "dry-run") {
+		score -= 5
+		recommendations = append(recommendations, "lazy callsite protection is dry-run only")
+	}
+	strongMode := m.Report.Preset == elfstr.PresetAggressive &&
+		m.Protection.CallsiteMode == "aarch64-lazy-decrypt-patch" &&
+		m.Protection.CallsiteLazySelected > 0
+	if !strongMode {
+		recommendations = append(recommendations, "aggressive preset with patched lazy callsites is required for commercial-ready grade")
+	}
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+	grade := "blocked"
+	if len(blockers) == 0 {
+		switch {
+		case score >= 90 && strongMode:
+			grade = "commercial-ready"
+		case score >= 75:
+			grade = "hardened"
+		default:
+			grade = "review-needed"
+		}
+	}
+	return auditSummary{
+		Grade:           grade,
+		Score:           score,
+		Blockers:        blockers,
+		Recommendations: recommendations,
+	}
 }
 
 func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
@@ -292,6 +396,13 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	}
 	if audit.OutputResolved != "" {
 		fmt.Printf("输出文件_解析后: %s\n", audit.OutputResolved)
+	}
+	fmt.Printf("审计评分: %s score=%d\n", audit.Summary.Grade, audit.Summary.Score)
+	for _, blocker := range audit.Summary.Blockers {
+		fmt.Printf("阻断项: %s\n", blocker)
+	}
+	for _, recommendation := range audit.Summary.Recommendations {
+		fmt.Printf("建议: %s\n", recommendation)
 	}
 	for _, check := range audit.Checks {
 		printAuditCheck(check)
