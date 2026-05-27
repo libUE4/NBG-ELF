@@ -176,6 +176,12 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if _, ok := decoded["summary"]; !ok {
 		t.Fatalf("audit json missing summary: %s", raw)
 	}
+	if _, ok := decoded["artifact"]; !ok {
+		t.Fatalf("audit json missing artifact: %s", raw)
+	}
+	if _, ok := decoded["capabilities"]; !ok {
+		t.Fatalf("audit json missing capabilities: %s", raw)
+	}
 }
 
 func TestBuildManifestAuditValidatesManifestSelfHash(t *testing.T) {
@@ -240,6 +246,34 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 	}
 	if len(summary.Blockers) != 0 {
 		t.Fatalf("unexpected blockers: %+v", summary.Blockers)
+	}
+}
+
+func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
+	m := &elfstr.Manifest{
+		ManifestSHA256: "manifest",
+		RuntimeStub: elfstr.RuntimeStubInfo{
+			SHA256: "runtime",
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			RuntimeTable:           "encrypted-per-entry-row-resealed",
+			PlaintextAudit:         "protected-entry-residue-scan-before-write",
+			AntiDebug:              "ptrace",
+			AntiFrida:              "maps",
+			Watermarked:            true,
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   1,
+			CallsiteLazyCandidates: 1,
+		},
+	}
+	got := auditCapabilities(m)
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDispatch || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+		t.Fatalf("capabilities = %+v", got)
+	}
+	m.Options.KeepSections = true
+	if auditCapabilities(m).SectionStripped {
+		t.Fatalf("section_stripped should be false when keep_sections is set")
 	}
 }
 

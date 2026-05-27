@@ -218,18 +218,39 @@ func writeJSONFile(path string, value any, perm os.FileMode) error {
 }
 
 type manifestAudit struct {
-	Schema         string       `json:"schema"`
-	InputPath      string       `json:"input_path"`
-	InputResolved  string       `json:"input_resolved,omitempty"`
-	OutputPath     string       `json:"output_path"`
-	OutputResolved string       `json:"output_resolved,omitempty"`
-	EntryCount     int          `json:"entry_count"`
-	EncryptedSize  int          `json:"encrypted_size"`
-	Preset         string       `json:"preset,omitempty"`
-	ControlFlow    string       `json:"control_flow,omitempty"`
-	CallsiteMode   string       `json:"callsite_mode,omitempty"`
-	Summary        auditSummary `json:"summary"`
-	Checks         []auditCheck `json:"checks"`
+	Schema         string        `json:"schema"`
+	InputPath      string        `json:"input_path"`
+	InputResolved  string        `json:"input_resolved,omitempty"`
+	OutputPath     string        `json:"output_path"`
+	OutputResolved string        `json:"output_resolved,omitempty"`
+	EntryCount     int           `json:"entry_count"`
+	EncryptedSize  int           `json:"encrypted_size"`
+	Preset         string        `json:"preset,omitempty"`
+	ControlFlow    string        `json:"control_flow,omitempty"`
+	CallsiteMode   string        `json:"callsite_mode,omitempty"`
+	Artifact       auditArtifact `json:"artifact"`
+	Capabilities   auditFeatures `json:"capabilities"`
+	Summary        auditSummary  `json:"summary"`
+	Checks         []auditCheck  `json:"checks"`
+}
+
+type auditArtifact struct {
+	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
+	InputSHA256    string `json:"input_sha256,omitempty"`
+	OutputSHA256   string `json:"output_sha256,omitempty"`
+	RuntimeSHA256  string `json:"runtime_sha256,omitempty"`
+}
+
+type auditFeatures struct {
+	RuntimeSelfCheck  bool `json:"runtime_self_check"`
+	RuntimeTableAudit bool `json:"runtime_table_audit"`
+	RuntimeDispatch   bool `json:"runtime_dispatch"`
+	PlaintextAudit    bool `json:"plaintext_audit"`
+	SectionStripped   bool `json:"section_stripped"`
+	AntiDebug         bool `json:"anti_debug"`
+	AntiFrida         bool `json:"anti_frida"`
+	ManifestSealed    bool `json:"manifest_sealed"`
+	Watermarked       bool `json:"watermarked"`
 }
 
 type auditSummary struct {
@@ -257,6 +278,13 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		Preset:        m.Report.Preset,
 		ControlFlow:   m.Protection.ControlFlow,
 		CallsiteMode:  m.Protection.CallsiteMode,
+		Artifact: auditArtifact{
+			ManifestSHA256: m.ManifestSHA256,
+			InputSHA256:    m.InputSHA256,
+			OutputSHA256:   m.OutputSHA256,
+			RuntimeSHA256:  m.RuntimeStub.SHA256,
+		},
+		Capabilities: auditCapabilities(m),
 	}
 	if inputPath != m.InputPath {
 		audit.InputResolved = inputPath
@@ -323,6 +351,20 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 func finalizeManifestAudit(audit manifestAudit, m *elfstr.Manifest) manifestAudit {
 	audit.Summary = buildAuditSummary(audit, m)
 	return audit
+}
+
+func auditCapabilities(m *elfstr.Manifest) auditFeatures {
+	return auditFeatures{
+		RuntimeSelfCheck:  m.Protection.RuntimeSelfCheck,
+		RuntimeTableAudit: m.Protection.RuntimeTable != "",
+		RuntimeDispatch:   elfstr.ManifestRequiresRuntimeDispatchAudit(m),
+		PlaintextAudit:    m.Protection.PlaintextAudit != "",
+		SectionStripped:   !m.Options.KeepSections,
+		AntiDebug:         m.Protection.AntiDebug != "",
+		AntiFrida:         m.Protection.AntiFrida != "",
+		ManifestSealed:    m.ManifestSHA256 != "",
+		Watermarked:       m.Protection.Watermarked,
+	}
 }
 
 func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
