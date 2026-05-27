@@ -298,8 +298,12 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 	m := &elfstr.Manifest{
 		ManifestSHA256: "manifest",
+		InputSHA256:    "input",
 		RuntimeStub: elfstr.RuntimeStubInfo{
 			SHA256: "runtime",
+		},
+		RuntimePayload: elfstr.RuntimePayloadInfo{
+			SHA256: "payload",
 		},
 		Protection: elfstr.ProtectionProfile{
 			RuntimeSelfCheck:       true,
@@ -314,7 +318,7 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		},
 	}
 	got := auditCapabilities(m)
-	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDispatch || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDispatch || !got.RuntimePayload || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
 		t.Fatalf("capabilities = %+v", got)
 	}
 	m.Options.KeepSections = true

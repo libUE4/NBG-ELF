@@ -246,6 +246,8 @@ type auditFeatures struct {
 	RuntimeSelfCheck  bool `json:"runtime_self_check"`
 	RuntimeTableAudit bool `json:"runtime_table_audit"`
 	RuntimeDispatch   bool `json:"runtime_dispatch"`
+	RuntimePayload    bool `json:"runtime_payload_sealed"`
+	InputSealed       bool `json:"input_sealed"`
 	PlaintextAudit    bool `json:"plaintext_audit"`
 	SectionStripped   bool `json:"section_stripped"`
 	AntiDebug         bool `json:"anti_debug"`
@@ -387,6 +389,8 @@ func auditCapabilities(m *elfstr.Manifest) auditFeatures {
 		RuntimeSelfCheck:  m.Protection.RuntimeSelfCheck,
 		RuntimeTableAudit: m.Protection.RuntimeTable != "",
 		RuntimeDispatch:   elfstr.ManifestRequiresRuntimeDispatchAudit(m),
+		RuntimePayload:    m.RuntimePayload.SHA256 != "",
+		InputSealed:       m.InputSHA256 != "",
 		PlaintextAudit:    m.Protection.PlaintextAudit != "",
 		SectionStripped:   !m.Options.KeepSections,
 		AntiDebug:         m.Protection.AntiDebug != "",
