@@ -132,6 +132,17 @@ func TestRuntimeTableCryptAndSplitKeyRoundTrip(t *testing.T) {
 		if key != e.Key {
 			t.Fatalf("split key mismatch at %d: got %#x want %#x", i, key, e.Key)
 		}
+		packedLen := readTablePackedLen(table, i)
+		if got := packedLen & 0xffff; got != uint32(e.Length) {
+			t.Fatalf("length mismatch at %d: got %d want %d", i, got, e.Length)
+		}
+		wantTag := runtimeEntryTag(e.Key, e.VAddr, uint32(e.Length), uint32(i), 0xaabbccdd, runtimeKeyIndexParam, e.SaltA, e.SaltB, e.Variant)
+		if got := byte(packedLen >> 16); got != wantTag {
+			t.Fatalf("runtime entry tag mismatch at %d: got %#x want %#x", i, got, wantTag)
+		}
+		if byte(packedLen>>16) == byte(packRuntimeLength(uint32(e.Length), e.Variant, 0)>>16) {
+			t.Fatalf("runtime entry tag should not be the legacy zero tag at %d", i)
+		}
 	}
 	if encodeTableSeed(0x12345678)^0xa5c35a7e != 0x12345678 {
 		t.Fatalf("table seed encoding mismatch")
@@ -300,6 +311,11 @@ func TestRuntimeEntrypointUsesStubSymbolOffset(t *testing.T) {
 
 func readTableKeyShard(table []byte, index int) uint32 {
 	off := index*stubTableEntSize + 12
+	return uint32(table[off]) | uint32(table[off+1])<<8 | uint32(table[off+2])<<16 | uint32(table[off+3])<<24
+}
+
+func readTablePackedLen(table []byte, index int) uint32 {
+	off := index*stubTableEntSize + 8
 	return uint32(table[off]) | uint32(table[off+1])<<8 | uint32(table[off+2])<<16 | uint32(table[off+3])<<24
 }
 

@@ -905,6 +905,8 @@ strdec_entry:
     ldr x7, [x25, #0]
     ldr w6, [x25, #8]
     and w1, w6, #0xffff
+    lsr w18, w6, #16
+    and w18, w18, #0xff
     lsr w16, w6, #24
     and w16, w16, #0xf
     ldr w2, [x25, #12]
@@ -936,6 +938,41 @@ strdec_entry:
     mul w8, w1, w8
     add w5, w5, w8
     eor w2, w2, w5
+
+    // Verify row-level integrity tag packed into length bits 16..23.
+    mov w5, w2
+    eor w5, w5, w23
+    eor w5, w5, w7
+    lsr x8, x7, #32
+    eor w5, w5, w8
+    eor w5, w5, w1
+    mul w8, w26, w12
+    eor w5, w5, w8
+    eor w5, w5, w15
+    ror w8, w17, #27
+    eor w5, w5, w8
+    mov w8, #0x9f3b
+    movk w8, #0x045d, lsl #16
+    mul w8, w16, w8
+    eor w5, w5, w8
+    mov w8, #0x7c15
+    movk w8, #0x7f4a, lsl #16
+    eor w5, w5, w8
+    eor w5, w5, w5, lsl #13
+    eor w5, w5, w5, lsr #17
+    eor w5, w5, w5, lsl #5
+    eor w5, w5, w5, lsr #11
+    mov w8, #0x79b9
+    movk w8, #0x9e37, lsl #16
+    add w5, w5, w8
+    eor w8, w5, w5, lsr #8
+    eor w8, w8, w5, lsr #16
+    eor w8, w8, w5, lsr #24
+    and w8, w8, #0xff
+    cmp w8, w18
+    b.eq .Lentry_tag_ok
+    brk #0x7a9
+.Lentry_tag_ok:
 
     mov w28, w2
     eor w28, w28, w7

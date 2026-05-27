@@ -13,32 +13,32 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0xf3c
-	stubHoneypotEntryOff    = 0x11b8
-	stubAnchorOff           = 0x1258
-	stubStaticVAOff         = 0x1260
-	stubOrigEntryOff        = 0x1268
-	stubPageVAOff           = 0x1270
-	stubPageLenOff          = 0x1278
-	stubPayloadLenOff       = 0x1280
-	stubEntryCountOff       = 0x1288
-	stubGuardSeedOff        = 0x128c
-	stubTableSeedOff        = 0x1290
-	stubKeySeedOff          = 0x1294
-	stubParamTableAOff      = 0x1298
-	stubParamTableBOff      = 0x129c
-	stubParamKeyIndexOff    = 0x12a0
-	stubParamStringPosOff   = 0x12a4
-	stubParamStringIndexOff = 0x12a8
-	stubGuardHashOff        = 0x12ac
-	stubOrigEntryKeyOff     = 0x12b0
-	stubTableOff            = 0x12b8
+	stubLazyEntryOff        = 0xfc4
+	stubHoneypotEntryOff    = 0x1240
+	stubAnchorOff           = 0x12e0
+	stubStaticVAOff         = 0x12e8
+	stubOrigEntryOff        = 0x12f0
+	stubPageVAOff           = 0x12f8
+	stubPageLenOff          = 0x1300
+	stubPayloadLenOff       = 0x1308
+	stubEntryCountOff       = 0x1310
+	stubGuardSeedOff        = 0x1314
+	stubTableSeedOff        = 0x1318
+	stubKeySeedOff          = 0x131c
+	stubParamTableAOff      = 0x1320
+	stubParamTableBOff      = 0x1324
+	stubParamKeyIndexOff    = 0x1328
+	stubParamStringPosOff   = 0x132c
+	stubParamStringIndexOff = 0x1330
+	stubGuardHashOff        = 0x1334
+	stubOrigEntryKeyOff     = 0x1338
+	stubTableOff            = 0x1340
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x12d0
-	stubLazyTableOff        = 0x12d8
+	stubLazyCountOff        = 0x1358
+	stubLazyTableOff        = 0x1360
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb88
-	stubDataEndOff          = 0x1328
+	stubDataEndOff          = 0x13b0
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -701,7 +701,8 @@ func buildRuntimeStringTable(entries []Entry, keySeed, keyIndexParam uint32) []b
 	for i, e := range entries {
 		off := i * stubTableEntSize
 		length := uint32(e.Length)
-		packedLen := packRuntimeLength(length, e.Variant)
+		tag := runtimeEntryTag(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, e.SaltB, e.Variant)
+		packedLen := packRuntimeLength(length, e.Variant, tag)
 		binary.LittleEndian.PutUint64(out[off:], e.VAddr)
 		binary.LittleEndian.PutUint32(out[off+8:], packedLen)
 		binary.LittleEndian.PutUint32(out[off+12:], splitRuntimeKey(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, e.SaltB, e.Variant))
@@ -732,8 +733,26 @@ func runtimeKeySplitMask(va uint64, length, index, keySeed, keyIndexParam, saltA
 	return mask
 }
 
-func packRuntimeLength(length uint32, variant uint8) uint32 {
-	return (length & 0xffff) | (uint32(variant&0x0f) << 24)
+func runtimeEntryTag(key uint32, va uint64, length, index, keySeed, keyIndexParam, saltA, saltB uint32, variant uint8) uint8 {
+	tag := key ^ keySeed ^ uint32(va) ^ uint32(va>>32) ^ length ^ (index * keyIndexParam) ^ saltA ^ bitsRotateLeft32(saltB, 5)
+	tag ^= uint32(variant&0x0f) * 0x045d9f3b
+	tag ^= 0x7f4a7c15
+	tag = mixXorShift32(tag)
+	tag ^= tag >> 11
+	tag += 0x9e3779b9
+	return byte(tag ^ (tag >> 8) ^ (tag >> 16) ^ (tag >> 24))
+}
+
+func bitsRotateLeft32(v uint32, n uint) uint32 {
+	n &= 31
+	if n == 0 {
+		return v
+	}
+	return (v << n) | (v >> (32 - n))
+}
+
+func packRuntimeLength(length uint32, variant uint8, tag uint8) uint32 {
+	return (length & 0xffff) | (uint32(tag) << 16) | (uint32(variant&0x0f) << 24)
 }
 
 func encodeTableSeed(seed uint32) uint32 {
