@@ -540,6 +540,15 @@ func ManifestRequiresRuntimeDispatchAudit(m *Manifest) bool {
 	return m.Protection.CallsiteMode == callsiteModeAArch64LazyDecrypt
 }
 
+func ValidateManifestRuntimeTable(m *Manifest, outputPath string) error {
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	expectedEntries := m.EntryCount + m.Protection.DecoyCount
+	return validateInjectedOutputRuntimeTable(outputRaw, expectedEntries)
+}
+
 func ReadManifest(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

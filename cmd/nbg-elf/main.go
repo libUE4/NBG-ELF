@@ -227,6 +227,14 @@ func runManifest(args []string) {
 		} else {
 			fmt.Println("明文槽位: ok")
 		}
+		if err := elfstr.ValidateManifestRuntimeTable(m, outputPath); err != nil {
+			fmt.Printf("运行时表: 无效 (%v)\n", err)
+			if *strict {
+				fatalText("manifest 运行时表审计失败")
+			}
+		} else {
+			fmt.Println("运行时表: ok")
+		}
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
 			if err := elfstr.ValidateManifestRuntimeDispatch(m, outputPath); err != nil {
 				fmt.Printf("运行时分派: 无效 (%v)\n", err)

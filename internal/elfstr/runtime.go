@@ -37,6 +37,8 @@ const (
 	stubLazyCountOff        = 0x11e0
 	stubLazyTableOff        = 0x11e8
 	stubLazyEntSize         = 56
+	stubRuntimeTableADROff  = 0xb88
+	stubDataEndOff          = 0x1238
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -113,8 +115,15 @@ func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]b
 	table := buildRuntimeStringTable(entries, meta.KeySeed, meta.ParamKeyIndex)
 	cryptRuntimeTable(table, meta.TableSeed, meta.ParamTableA, meta.ParamTableB)
 	metaBlob := buildRuntimeMeta(meta)
-	payload := make([]byte, 0, stubTableOff+len(table)+len(metaBlob))
-	payload = append(payload, stub[:stubTableOff]...)
+	tableOff := alignUp(uint64(stubDataEndOff), 16)
+	payload := make([]byte, 0, int(tableOff)+len(table)+len(metaBlob))
+	payload = append(payload, stub...)
+	for uint64(len(payload)) < tableOff {
+		payload = append(payload, 0)
+	}
+	if err := patchADRToPayloadOffset(payload, stubRuntimeTableADROff, tableOff); err != nil {
+		return nil, err
+	}
 	payload = append(payload, table...)
 	payload = append(payload, metaBlob...)
 	for len(payload)%16 != 0 {
@@ -239,6 +248,26 @@ func validateInjectedOutput(data []byte, keepSections bool) error {
 }
 
 func validateInjectedOutputLazyDispatch(data []byte) error {
+	ph, payloadRaw, declaredLen, err := findRuntimePayload(data)
+	if err != nil {
+		return err
+	}
+	entries, err := validateLazyDispatchMetadata(payloadRaw, ph.Vaddr, declaredLen)
+	if err != nil {
+		return err
+	}
+	return validateLazyDispatchCallsites(data, ph.Vaddr+stubLazyEntryOff, entries)
+}
+
+func validateInjectedOutputRuntimeTable(data []byte, expectedEntries int) error {
+	_, payloadRaw, _, err := findRuntimePayload(data)
+	if err != nil {
+		return err
+	}
+	return validateRuntimeTableMetadata(payloadRaw, expectedEntries)
+}
+
+func findRuntimePayload(data []byte) (elf64Phdr, []byte, uint64, error) {
 	ehdr := readEhdr64(data)
 	for i := 0; i < int(ehdr.Phnum); i++ {
 		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
@@ -246,23 +275,54 @@ func validateInjectedOutputLazyDispatch(data []byte) error {
 			continue
 		}
 		if ph.Off+ph.Filesz > uint64(len(data)) {
-			return fmt.Errorf("runtime payload segment exceeds file size")
+			return elf64Phdr{}, nil, 0, fmt.Errorf("runtime payload segment exceeds file size")
 		}
 		payloadRaw := data[ph.Off : ph.Off+ph.Filesz]
 		if len(payloadRaw) <= stubPayloadLenOff+8 {
-			return fmt.Errorf("runtime payload too small for payload length field")
+			return elf64Phdr{}, nil, 0, fmt.Errorf("runtime payload too small for payload length field")
 		}
 		declaredLen := binary.LittleEndian.Uint64(payloadRaw[stubPayloadLenOff:])
 		if declaredLen == 0 || declaredLen > ph.Filesz {
-			return fmt.Errorf("runtime payload length field invalid: %#x filesz=%#x", declaredLen, ph.Filesz)
+			return elf64Phdr{}, nil, 0, fmt.Errorf("runtime payload length field invalid: %#x filesz=%#x", declaredLen, ph.Filesz)
 		}
-		entries, err := validateLazyDispatchMetadata(payloadRaw, ph.Vaddr, declaredLen)
-		if err != nil {
-			return err
-		}
-		return validateLazyDispatchCallsites(data, ph.Vaddr+stubLazyEntryOff, entries)
+		return ph, payloadRaw, declaredLen, nil
 	}
-	return fmt.Errorf("injected runtime payload LOAD segment not found")
+	return elf64Phdr{}, nil, 0, fmt.Errorf("injected runtime payload LOAD segment not found")
+}
+
+func validateRuntimeTableMetadata(payloadRaw []byte, expectedEntries int) error {
+	if expectedEntries < 0 {
+		return fmt.Errorf("expected runtime entry count must be >= 0")
+	}
+	if len(payloadRaw) <= stubEntryCountOff+4 {
+		return fmt.Errorf("runtime payload too small for entry count")
+	}
+	entryCount := binary.LittleEndian.Uint32(payloadRaw[stubEntryCountOff:])
+	if uint64(entryCount) != uint64(expectedEntries) {
+		return fmt.Errorf("runtime entry count got %d want %d", entryCount, expectedEntries)
+	}
+	tableOff := alignUp(uint64(stubDataEndOff), 16)
+	tableLen := uint64(entryCount) * uint64(stubTableEntSize)
+	if tableLen/uint64(stubTableEntSize) != uint64(entryCount) {
+		return fmt.Errorf("runtime table length overflow: count=%d", entryCount)
+	}
+	if tableOff < uint64(stubLazyTableOff+8) {
+		return fmt.Errorf("runtime table overlaps lazy metadata: table_off=%#x lazy_end=%#x", tableOff, stubLazyTableOff+8)
+	}
+	if tableOff > uint64(len(payloadRaw)) || tableLen > uint64(len(payloadRaw))-tableOff {
+		return fmt.Errorf("runtime table outside payload: off=%#x len=%#x filesz=%#x", tableOff, tableLen, len(payloadRaw))
+	}
+	if len(payloadRaw) <= stubRuntimeTableADROff+4 {
+		return fmt.Errorf("runtime payload too small for table ADR")
+	}
+	rd, targetOff, ok := decodeAArch64ADR(binary.LittleEndian.Uint32(payloadRaw[stubRuntimeTableADROff:]), stubRuntimeTableADROff)
+	if !ok || rd != 25 {
+		return fmt.Errorf("runtime table ADR is invalid")
+	}
+	if targetOff != tableOff {
+		return fmt.Errorf("runtime table ADR target got %#x want %#x", targetOff, tableOff)
+	}
+	return nil
 }
 
 func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint64) ([]LazyDispatchEntry, error) {
@@ -578,6 +638,23 @@ func patchAArch64B(payload []byte, fromOff, toOff uint32) {
 	}
 	insn := uint32(0x14000000) | (uint32(imm26) & 0x03ffffff)
 	binary.LittleEndian.PutUint32(payload[fromOff:], insn)
+}
+
+func patchADRToPayloadOffset(payload []byte, adrOff uint64, targetOff uint64) error {
+	if adrOff+4 > uint64(len(payload)) {
+		return fmt.Errorf("ADR patch offset outside payload: %#x", adrOff)
+	}
+	insn := binary.LittleEndian.Uint32(payload[adrOff:])
+	rd, _, ok := decodeAArch64ADR(insn, adrOff)
+	if !ok {
+		return fmt.Errorf("instruction at %#x is not ADR", adrOff)
+	}
+	adr, ok := encodeAArch64ADR(rd, adrOff, targetOff)
+	if !ok {
+		return fmt.Errorf("ADR target out of range: pc=%#x target=%#x", adrOff, targetOff)
+	}
+	binary.LittleEndian.PutUint32(payload[adrOff:], adr)
+	return nil
 }
 
 func randomizeStubPlaceholders(payload []byte) error {

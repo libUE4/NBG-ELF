@@ -936,6 +936,32 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	if err := validateInjectedOutput(corrupt, false); err == nil {
 		t.Fatalf("validate injected output accepted corrupt entrypoint")
 	}
+	expectedEntries := 1
+	if err := validateInjectedOutputRuntimeTable(out, expectedEntries); err != nil {
+		t.Fatalf("validate runtime table failed: %v", err)
+	}
+	corruptTable := append([]byte(nil), out...)
+	_, payloadRaw, _, err := findRuntimePayload(corruptTable)
+	if err != nil {
+		t.Fatalf("find runtime payload: %v", err)
+	}
+	binary.LittleEndian.PutUint32(payloadRaw[stubEntryCountOff:], 2)
+	if err := validateInjectedOutputRuntimeTable(corruptTable, expectedEntries); err == nil {
+		t.Fatalf("validate runtime table accepted corrupt entry count")
+	}
+}
+
+func TestRuntimeTableADROffsetTargetsStubTable(t *testing.T) {
+	if int(stubRuntimeTableADROff)+4 > len(assets.StrdecBlob) {
+		t.Fatalf("runtime table ADR offset outside stub")
+	}
+	rd, target, ok := decodeAArch64ADR(binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableADROff:]), stubRuntimeTableADROff)
+	if !ok || rd != 25 {
+		t.Fatalf("runtime table ADR decode ok=%v rd=%d", ok, rd)
+	}
+	if target != stubTableOff {
+		t.Fatalf("runtime table ADR target got %#x want %#x", target, stubTableOff)
+	}
 }
 
 func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
