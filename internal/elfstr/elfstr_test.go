@@ -425,12 +425,12 @@ func TestNoAntiFridaExtraKeepsGuardHash(t *testing.T) {
 }
 
 func TestCallsiteControlFlowLabel(t *testing.T) {
-	scanOnly := callsiteControlFlowLabel(callsiteModeAArch64ScanOnly)
-	if scanOnly != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan" {
+	scanOnly := callsiteControlFlowLabel(callsiteModeAArch64ScanOnly, 2)
+	if scanOnly != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan; cfg-level-balanced; runtime-state-dispatch" {
 		t.Errorf("scan-only label got %q", scanOnly)
 	}
-	dryRun := callsiteControlFlowLabel(callsiteModeAArch64DryRun)
-	if dryRun != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan; aarch64-callsite-lazy-dry-run" {
+	dryRun := callsiteControlFlowLabel(callsiteModeAArch64DryRun, 3)
+	if dryRun != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan; cfg-level-aggressive; runtime-state-dispatch; honeypot-branch-fanout; aarch64-callsite-lazy-dry-run" {
 		t.Errorf("dry-run label got %q", dryRun)
 	}
 }
@@ -732,7 +732,24 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	m := Manifest{
 		Schema: Schema,
 		Tool:   "nbg-elf",
+		Config: ProtectionConfig{
+			Preset:           PresetAggressive,
+			ControlFlowLevel: 3,
+			FailurePolicy:    "safe-exit",
+		},
+		Report: ProtectionReport{
+			Preset:             PresetAggressive,
+			ControlFlowLevel:   3,
+			FailurePolicy:      "safe-exit",
+			CallsiteCandidates: 5,
+			CallsiteSelected:   2,
+			CallsiteSkipped:    3,
+			CallsiteLimit:      2,
+		},
 		Options: ManifestOptions{
+			Preset:           PresetAggressive,
+			ControlFlowLevel: 3,
+			FailurePolicy:    "safe-exit",
 			LazyCallsite:     true,
 			NoAntiFridaExtra: true,
 		},
@@ -760,6 +777,12 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["runtime_stub"]; !ok {
 		t.Fatalf("manifest json missing runtime_stub: %s", raw)
+	}
+	if _, ok := decoded["config"]; !ok {
+		t.Fatalf("manifest json missing config: %s", raw)
+	}
+	if _, ok := decoded["report"]; !ok {
+		t.Fatalf("manifest json missing report: %s", raw)
 	}
 }
 

@@ -61,6 +61,9 @@ func runEncrypt(args []string) {
 	fs := flag.NewFlagSet("encrypt", flag.ExitOnError)
 	out := fs.String("o", "", "output ELF path (default: tool directory/basename.vmp)")
 	manifest := fs.String("manifest", "", "manifest output path")
+	preset := fs.String("preset", elfstr.PresetBalanced, "protection preset: safe, balanced, aggressive")
+	configPath := fs.String("config", "", "JSON protection config path")
+	reportOnly := fs.Bool("report", false, "print protection plan without writing output")
 	minLen := fs.Int("min", 6, "minimum string length")
 	includeData := fs.Bool("data", false, "also encrypt .data")
 	watermark := fs.String("watermark", "", "optional user watermark embedded as a hash")
@@ -85,22 +88,44 @@ func runEncrypt(args []string) {
 	if manifestPath == "" {
 		manifestPath = outputPath + ".manifest.json"
 	}
-	m, err := elfstr.EncryptFile(inputPath, outputPath, manifestPath, elfstr.Options{
-		MinLen:             *minLen,
-		IncludeData:        *includeData,
-		Watermark:          *watermark,
-		ManifestDetail:     *manifestDetail,
-		KeepSections:       *keepSections,
-		NoAntiFridaExtra:   *noAntiFridaExtra,
-		SafeScan:           *safeScan,
-		LazyCallsite:       *lazyCallsite,
-		LazyCallsiteDryRun: *lazyCallsiteDryRun,
-		LazyCallsiteLimit:  *lazyCallsiteLimit,
+	configPreset := *preset
+	if *configPath != "" && !flagWasSet(fs, "preset") {
+		configPreset = ""
+	}
+	cfg, err := elfstr.LoadProtectionConfig(*configPath, configPreset)
+	if err != nil {
+		fatal(err)
+	}
+	opts := elfstr.Options{
+		MinLen:         *minLen,
+		IncludeData:    *includeData,
+		Watermark:      *watermark,
+		ManifestDetail: *manifestDetail,
+	}
+	cfg.ApplyToOptions(&opts)
+	applyEncryptFlagOverrides(fs, &opts, map[string]func(){
+		"keep-sections":         func() { opts.KeepSections = *keepSections },
+		"no-anti-frida-extra":   func() { opts.NoAntiFridaExtra = *noAntiFridaExtra },
+		"safe-scan":             func() { opts.SafeScan = *safeScan },
+		"lazy-callsite":         func() { opts.LazyCallsite = *lazyCallsite },
+		"lazy-callsite-dry-run": func() { opts.LazyCallsiteDryRun = *lazyCallsiteDryRun },
+		"lazy-callsite-limit":   func() { opts.LazyCallsiteLimit = *lazyCallsiteLimit },
 	})
+	if *reportOnly {
+		report, err := elfstr.PlanProtectionFile(inputPath, opts)
+		if err != nil {
+			fatal(err)
+		}
+		printProtectionReport(report)
+		return
+	}
+	m, err := elfstr.EncryptFile(inputPath, outputPath, manifestPath, opts)
 	if err != nil {
 		fatal(err)
 	}
 	fmt.Printf("[+] encrypted strings: %d (%d bytes)\n", m.EntryCount, m.EncryptedSize)
+	fmt.Printf("[+] preset: %s cfg_level=%d failure=%s\n", m.Report.Preset, m.Report.ControlFlowLevel, m.Report.FailurePolicy)
+	fmt.Printf("[+] callsites: candidates=%d selected=%d skipped=%d mode=%s\n", m.Report.CallsiteCandidates, m.Report.CallsiteSelected, m.Report.CallsiteSkipped, m.Report.CallsiteMode)
 	fmt.Printf("[+] output: %s\n", m.OutputPath)
 	fmt.Printf("[+] manifest: %s\n", manifestPath)
 }
@@ -108,6 +133,35 @@ func runEncrypt(args []string) {
 func runVerify(args []string) {
 	args = append([]string{"-strict"}, args...)
 	runManifest(args)
+}
+
+func applyEncryptFlagOverrides(fs *flag.FlagSet, opts *elfstr.Options, overrides map[string]func()) {
+	fs.Visit(func(f *flag.Flag) {
+		if apply, ok := overrides[f.Name]; ok {
+			apply()
+		}
+	})
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	seen := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			seen = true
+		}
+	})
+	return seen
+}
+
+func printProtectionReport(report *elfstr.ProtectionReport) {
+	fmt.Printf("preset: %s\n", report.Preset)
+	fmt.Printf("control_flow_level: %d\n", report.ControlFlowLevel)
+	fmt.Printf("failure_policy: %s\n", report.FailurePolicy)
+	fmt.Printf("strings: %d (%d bytes)\n", report.Strings, report.Bytes)
+	fmt.Printf("callsites: candidates=%d selected=%d skipped=%d mode=%s\n", report.CallsiteCandidates, report.CallsiteSelected, report.CallsiteSkipped, report.CallsiteMode)
+	for _, warning := range report.Warnings {
+		fmt.Printf("warning: %s\n", warning)
+	}
 }
 
 func runManifest(args []string) {
@@ -175,6 +229,10 @@ func runManifest(args []string) {
 		}
 	}
 	fmt.Printf("entries: %d (%d bytes)\n", m.EntryCount, m.EncryptedSize)
+	if m.Report.Preset != "" {
+		fmt.Printf("preset: %s cfg_level=%d failure=%s\n", m.Report.Preset, m.Report.ControlFlowLevel, m.Report.FailurePolicy)
+		fmt.Printf("report_callsites: candidates=%d selected=%d skipped=%d mode=%s\n", m.Report.CallsiteCandidates, m.Report.CallsiteSelected, m.Report.CallsiteSkipped, m.Report.CallsiteMode)
+	}
 	fmt.Printf("options: keep_sections=%v safe_scan=%v lazy_callsite=%v lazy_dry_run=%v lazy_limit=%d no_anti_frida_extra=%v manifest_detail=%v\n", m.Options.KeepSections, m.Options.SafeScan, m.Options.LazyCallsite, m.Options.LazyCallsiteDryRun, m.Options.LazyCallsiteLimit, m.Options.NoAntiFridaExtra, m.Options.ManifestDetail)
 	fmt.Printf("control_flow: %s\n", m.Protection.ControlFlow)
 	if m.Protection.PlaintextAudit != "" {
@@ -248,11 +306,12 @@ usage:
 
 commands:
   inspect [flags] <input.elf>
-  encrypt [flags] <input.elf>
+  encrypt [-preset safe|balanced|aggressive] [-config protection.json] [flags] <input.elf>
   manifest [-strict] <manifest.json>
   verify <manifest.json>
 
 notes:
+  -report prints the planned protection profile without writing output.
   decrypt is intentionally unsupported for runtime-injected outputs; keep the original ELF as the source artifact.
   manifest prints protection metadata and verifies output_sha256 when the output file is accessible.
   verify is an alias for manifest -strict.`)

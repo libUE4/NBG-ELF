@@ -30,6 +30,9 @@ type Options struct {
 	MinLen             int
 	IncludeData        bool
 	Watermark          string
+	Preset             string
+	ControlFlowLevel   int
+	FailurePolicy      string
 	ManifestDetail     bool
 	KeepSections       bool
 	LazyCallsite       bool
@@ -46,6 +49,8 @@ type Manifest struct {
 	BuildID       string            `json:"build_id"`
 	WatermarkHash string            `json:"watermark_hash,omitempty"`
 	Protection    ProtectionProfile `json:"protection"`
+	Config        ProtectionConfig  `json:"config,omitempty"`
+	Report        ProtectionReport  `json:"report,omitempty"`
 	Options       ManifestOptions   `json:"options,omitempty"`
 	RuntimeStub   RuntimeStubInfo   `json:"runtime_stub,omitempty"`
 	InputPath     string            `json:"input_path"`
@@ -60,13 +65,16 @@ type Manifest struct {
 }
 
 type ManifestOptions struct {
-	KeepSections       bool `json:"keep_sections,omitempty"`
-	SafeScan           bool `json:"safe_scan,omitempty"`
-	LazyCallsite       bool `json:"lazy_callsite,omitempty"`
-	LazyCallsiteDryRun bool `json:"lazy_callsite_dry_run,omitempty"`
-	LazyCallsiteLimit  int  `json:"lazy_callsite_limit,omitempty"`
-	NoAntiFridaExtra   bool `json:"no_anti_frida_extra,omitempty"`
-	ManifestDetail     bool `json:"manifest_detail,omitempty"`
+	Preset             string `json:"preset,omitempty"`
+	ControlFlowLevel   int    `json:"control_flow_level,omitempty"`
+	FailurePolicy      string `json:"failure_policy,omitempty"`
+	KeepSections       bool   `json:"keep_sections,omitempty"`
+	SafeScan           bool   `json:"safe_scan,omitempty"`
+	LazyCallsite       bool   `json:"lazy_callsite,omitempty"`
+	LazyCallsiteDryRun bool   `json:"lazy_callsite_dry_run,omitempty"`
+	LazyCallsiteLimit  int    `json:"lazy_callsite_limit,omitempty"`
+	NoAntiFridaExtra   bool   `json:"no_anti_frida_extra,omitempty"`
+	ManifestDetail     bool   `json:"manifest_detail,omitempty"`
 }
 
 type RuntimeStubInfo struct {
@@ -126,16 +134,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
-	minLen := opts.MinLen
-	if minLen == 0 {
-		minLen = defaultMinLen
-	}
-	if minLen < minStringLen {
-		minLen = minStringLen
-	}
-	if opts.SafeScan && opts.MinLen == 0 {
-		minLen = safeScanMinLen
-	}
+	minLen := effectiveMinLen(opts)
 	entries, err := scan(raw, minLen, opts.IncludeData, opts.SafeScan)
 	if err != nil {
 		return nil, err
@@ -298,9 +297,34 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if opts.NoAntiFridaExtra {
 		antiFrida = "extra-frida-gum-gadget-probes-disabled-for-compat-test; tracerpid-status-probe-kept"
 	}
-	controlFlow := callsiteControlFlowLabel(callsiteMode)
+	controlFlowLevel := effectiveControlFlowLevel(opts.ControlFlowLevel)
+	controlFlow := callsiteControlFlowLabel(callsiteMode, controlFlowLevel)
 	if opts.SafeScan {
 		controlFlow += "; safe-scan-test"
+	}
+	report := ProtectionReport{
+		Preset:             effectivePreset(opts.Preset),
+		ControlFlowLevel:   controlFlowLevel,
+		FailurePolicy:      effectiveFailurePolicy(opts.FailurePolicy),
+		Strings:            len(manifestEntries),
+		Bytes:              total,
+		CallsiteCandidates: len(callsiteCandidates),
+		CallsiteSelected:   callsiteSelected,
+		CallsiteSkipped:    len(callsiteCandidates) - callsiteSelected,
+		CallsiteMode:       callsiteMode,
+		CallsiteLimit:      opts.LazyCallsiteLimit,
+		Warnings:           protectionWarnings(opts, len(callsiteCandidates), callsiteSelected),
+	}
+	cfg := ProtectionConfig{
+		Preset:             report.Preset,
+		ControlFlowLevel:   report.ControlFlowLevel,
+		LazyCallsite:       opts.LazyCallsite,
+		LazyCallsiteDryRun: opts.LazyCallsiteDryRun,
+		LazyCallsiteLimit:  opts.LazyCallsiteLimit,
+		SafeScan:           opts.SafeScan,
+		KeepSections:       opts.KeepSections,
+		NoAntiFridaExtra:   opts.NoAntiFridaExtra,
+		FailurePolicy:      report.FailurePolicy,
 	}
 	m := &Manifest{
 		Schema:        Schema,
@@ -308,7 +332,12 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		GeneratedUTC:  time.Now().UTC().Format(time.RFC3339),
 		BuildID:       buildID,
 		WatermarkHash: watermarkHash,
+		Config:        cfg,
+		Report:        report,
 		Options: ManifestOptions{
+			Preset:             report.Preset,
+			ControlFlowLevel:   report.ControlFlowLevel,
+			FailurePolicy:      report.FailurePolicy,
 			KeepSections:       opts.KeepSections,
 			SafeScan:           opts.SafeScan,
 			LazyCallsite:       opts.LazyCallsite,
@@ -332,7 +361,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			RandomizedLayout:       true,
 			Watermarked:            watermarkHash != "",
 			DecryptPhase:           manifestPhase,
-			StageCount:             runtimeStageCount,
+			StageCount:             runtimeStageCount + controlFlowLevel - 1,
 			KeyScope:               "per-string-salted-variant",
 			KeyMaterial:            "xorshift-split-runtime-seed-uint32-per-entry-salt",
 			RuntimeTable:           "encrypted-per-entry-row-resealed",
@@ -349,7 +378,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			CallsiteLazyCandidates: len(callsiteCandidates),
 			CallsiteLazySelected:   callsiteSelected,
 			CallsiteLazyHashes:     lazyHashes,
-			MemoryWindow:           "entry-row-resealed; seeds-wiped; procfs-scratch-wiped; pages-rx-restored",
+			MemoryWindow:           "entry-row-resealed; seeds-wiped; procfs-scratch-wiped; pages-rx-restored; failure-policy-safe-exit",
 			PageRestore:            true,
 			ManifestDetail:         opts.ManifestDetail,
 		},
@@ -369,8 +398,16 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	return m, nil
 }
 
-func callsiteControlFlowLabel(mode string) string {
+func callsiteControlFlowLabel(mode string, level int) string {
 	base := "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan"
+	switch effectiveControlFlowLevel(level) {
+	case 1:
+		base += "; cfg-level-safe"
+	case 3:
+		base += "; cfg-level-aggressive; runtime-state-dispatch; honeypot-branch-fanout"
+	default:
+		base += "; cfg-level-balanced; runtime-state-dispatch"
+	}
 	if mode == callsiteModeAArch64DryRun {
 		return base + "; aarch64-callsite-lazy-dry-run"
 	}

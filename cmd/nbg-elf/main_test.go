@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"nbg-elf/internal/elfstr"
 )
 
 func TestResolveManifestOutputPath(t *testing.T) {
@@ -41,5 +44,39 @@ func TestResolveManifestInputPath(t *testing.T) {
 	}
 	if got := resolveManifestInputPath(manifestPath, "missing.elf"); got != "missing.elf" {
 		t.Fatalf("missing input resolved to %q want original", got)
+	}
+}
+
+func TestFlagWasSet(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	_ = fs.Bool("lazy-callsite", false, "")
+	if err := fs.Parse([]string{"-lazy-callsite"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	if !flagWasSet(fs, "lazy-callsite") {
+		t.Fatalf("expected lazy-callsite to be marked set")
+	}
+	if flagWasSet(fs, "preset") {
+		t.Fatalf("unexpected preset flag")
+	}
+}
+
+func TestApplyEncryptFlagOverridesOnlyVisitsExplicitFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	limit := fs.Int("lazy-callsite-limit", 0, "")
+	keepSections := fs.Bool("keep-sections", false, "")
+	if err := fs.Parse([]string{"-lazy-callsite-limit", "5"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	opts := elfstr.Options{KeepSections: true}
+	applyEncryptFlagOverrides(fs, &opts, map[string]func(){
+		"lazy-callsite-limit": func() { opts.LazyCallsiteLimit = *limit },
+		"keep-sections":       func() { opts.KeepSections = *keepSections },
+	})
+	if opts.LazyCallsiteLimit != 5 {
+		t.Fatalf("lazy limit got %d want 5", opts.LazyCallsiteLimit)
+	}
+	if !opts.KeepSections {
+		t.Fatalf("keep-sections should not be overridden by an implicit default")
 	}
 }
