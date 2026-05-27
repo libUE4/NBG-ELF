@@ -593,6 +593,9 @@ func TestLazyDispatchTableLayoutConstants(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(out[stubLazyCountOff:]); got != 1 {
 		t.Fatalf("lazy count got %d want 1", got)
 	}
+	if got := binary.LittleEndian.Uint64(out[stubPayloadLenOff:]); got != uint64(len(out)) {
+		t.Fatalf("payload len got %#x want %#x", got, len(out))
+	}
 	tableVA := binary.LittleEndian.Uint64(out[stubLazyTableOff:])
 	if tableVA < 0x100000 {
 		t.Fatalf("lazy table VA got %#x want payload-relative pointer", tableVA)
@@ -618,6 +621,36 @@ func TestLazyDispatchTableLayoutConstants(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint64(out[base+48:]); got != de.OrigTarget {
 		t.Fatalf("OrigTarget got %#x want %#x", got, de.OrigTarget)
+	}
+}
+
+func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
+	entries := []Entry{{
+		Section:      ".rodata",
+		VAddr:        0x5000,
+		Length:       16,
+		RuntimeIndex: 3,
+		Key:          0x12345678,
+		SaltA:        0x10,
+		SaltB:        0x20,
+		Variant:      2,
+	}}
+	candidates := []CallsiteCandidate{{
+		TextVAddr:   0x1000,
+		CallTarget:  0x2000,
+		StringVAddr: 0x5008,
+	}}
+	meta := RuntimeMeta{ParamStringPos: 0x9d, ParamStringIndex: 0x7b}
+	dispatch := buildLazyDispatchEntries(candidates, entries, meta)
+	if len(dispatch) != 1 {
+		t.Fatalf("dispatch count got %d want 1", len(dispatch))
+	}
+	if dispatch[0].StringVA != 0x5000 || dispatch[0].Length != 16 {
+		t.Fatalf("dispatch entry = %+v", dispatch[0])
+	}
+	lazyVAs := lazyDispatchStringEntryVAs(dispatch, entries)
+	if _, ok := lazyVAs[0x5000]; !ok || len(lazyVAs) != 1 {
+		t.Fatalf("lazy dispatch VA map = %#v", lazyVAs)
 	}
 }
 
@@ -872,6 +905,53 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	binary.LittleEndian.PutUint64(corrupt[0x18:], 0x1234)
 	if err := validateInjectedOutput(corrupt, false); err == nil {
 		t.Fatalf("validate injected output accepted corrupt entrypoint")
+	}
+}
+
+func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
+	data := make([]byte, stubLazyTableOff+8)
+	copy(data, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
+	binary.LittleEndian.PutUint64(data[0x20:], 0x40)
+	binary.LittleEndian.PutUint16(data[0x36:], 56)
+	binary.LittleEndian.PutUint16(data[0x38:], 1)
+	writePhdr64(data, 0x40, elf64Phdr{Type: ptLoad, Flags: pfR | pfW | pfX, Off: 0, Vaddr: 0x100000, Paddr: 0x100000, Filesz: uint64(len(data)), Memsz: uint64(len(data)), Align: 0x1000})
+	de := LazyDispatchEntry{
+		TextVA:     0x100100,
+		StringVA:   0x200200,
+		Length:     12,
+		KeyState:   0x11111111,
+		PosParam:   0x22,
+		IdxParam:   0x33,
+		SaltA:      0x44,
+		SaltB:      0x55,
+		Variant:    1,
+		OrigTarget: 0x300300,
+	}
+	out := appendLazyDispatchTable(data, []LazyDispatchEntry{de}, 0x100000)
+	payloadLen := uint64(len(out))
+	binary.LittleEndian.PutUint64(out[stubPayloadLenOff:], payloadLen)
+	if err := validateInjectedOutputLazyDispatch(out); err != nil {
+		t.Fatalf("validate lazy dispatch failed: %v", err)
+	}
+
+	corruptPtr := append([]byte(nil), out...)
+	binary.LittleEndian.PutUint64(corruptPtr[stubLazyTableOff:], 0x999)
+	if err := validateInjectedOutputLazyDispatch(corruptPtr); err == nil {
+		t.Fatalf("accepted lazy dispatch table before payload")
+	}
+
+	corruptLen := append([]byte(nil), out...)
+	tableVA := binary.LittleEndian.Uint64(corruptLen[stubLazyTableOff:])
+	base := int(tableVA - 0x100000)
+	binary.LittleEndian.PutUint32(corruptLen[base+16:], 0)
+	if err := validateInjectedOutputLazyDispatch(corruptLen); err == nil {
+		t.Fatalf("accepted lazy dispatch entry with zero length")
+	}
+
+	corruptPad := append([]byte(nil), out...)
+	corruptPad[base+41] = 0xff
+	if err := validateInjectedOutputLazyDispatch(corruptPad); err == nil {
+		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
 	}
 }
 

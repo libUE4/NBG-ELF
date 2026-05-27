@@ -238,6 +238,82 @@ func validateInjectedOutput(data []byte, keepSections bool) error {
 	return nil
 }
 
+func validateInjectedOutputLazyDispatch(data []byte) error {
+	ehdr := readEhdr64(data)
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type != ptLoad || ph.Flags != pfR|pfW|pfX {
+			continue
+		}
+		if ph.Off+ph.Filesz > uint64(len(data)) {
+			return fmt.Errorf("runtime payload segment exceeds file size")
+		}
+		payloadRaw := data[ph.Off : ph.Off+ph.Filesz]
+		if len(payloadRaw) <= stubPayloadLenOff+8 {
+			return fmt.Errorf("runtime payload too small for payload length field")
+		}
+		declaredLen := binary.LittleEndian.Uint64(payloadRaw[stubPayloadLenOff:])
+		if declaredLen == 0 || declaredLen > ph.Filesz {
+			return fmt.Errorf("runtime payload length field invalid: %#x filesz=%#x", declaredLen, ph.Filesz)
+		}
+		return validateLazyDispatchMetadata(payloadRaw, ph.Vaddr, declaredLen)
+	}
+	return fmt.Errorf("injected runtime payload LOAD segment not found")
+}
+
+func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint64) error {
+	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
+		return fmt.Errorf("runtime payload too small for lazy dispatch metadata")
+	}
+	lazyCount := binary.LittleEndian.Uint32(payloadRaw[stubLazyCountOff:])
+	lazyTableVA := binary.LittleEndian.Uint64(payloadRaw[stubLazyTableOff:])
+	if lazyCount == 0 {
+		if lazyTableVA != 0 && lazyTableVA != 0x123456789abcdef0 {
+			return fmt.Errorf("lazy dispatch table set without entries: %#x", lazyTableVA)
+		}
+		return nil
+	}
+	if lazyTableVA < payloadVA {
+		return fmt.Errorf("lazy dispatch table VA before payload: %#x payload=%#x", lazyTableVA, payloadVA)
+	}
+	tableOff := lazyTableVA - payloadVA
+	tableLen := uint64(lazyCount) * uint64(stubLazyEntSize)
+	if tableLen/uint64(stubLazyEntSize) != uint64(lazyCount) {
+		return fmt.Errorf("lazy dispatch table length overflow: count=%d", lazyCount)
+	}
+	if tableOff > declaredLen || tableLen > declaredLen-tableOff {
+		return fmt.Errorf("lazy dispatch table outside payload: off=%#x len=%#x payload_len=%#x", tableOff, tableLen, declaredLen)
+	}
+	if tableOff+tableLen > uint64(len(payloadRaw)) {
+		return fmt.Errorf("lazy dispatch table outside payload file bytes: off=%#x len=%#x filesz=%#x", tableOff, tableLen, len(payloadRaw))
+	}
+	for i := uint32(0); i < lazyCount; i++ {
+		off := int(tableOff) + int(i)*stubLazyEntSize
+		textVA := binary.LittleEndian.Uint64(payloadRaw[off:])
+		stringVA := binary.LittleEndian.Uint64(payloadRaw[off+8:])
+		length := binary.LittleEndian.Uint32(payloadRaw[off+16:])
+		origTarget := binary.LittleEndian.Uint64(payloadRaw[off+48:])
+		if textVA == 0 {
+			return fmt.Errorf("lazy dispatch entry %d has empty text VA", i)
+		}
+		if stringVA == 0 {
+			return fmt.Errorf("lazy dispatch entry %d has empty string VA", i)
+		}
+		if length == 0 {
+			return fmt.Errorf("lazy dispatch entry %d has empty length", i)
+		}
+		if origTarget == 0 {
+			return fmt.Errorf("lazy dispatch entry %d has empty original target", i)
+		}
+		for _, b := range payloadRaw[off+41 : off+48] {
+			if b != 0 {
+				return fmt.Errorf("lazy dispatch entry %d padding is not zero", i)
+			}
+		}
+	}
+	return nil
+}
+
 func validateNoPlaintextResidue(raw, out []byte, entries []Entry) error {
 	for _, e := range entries {
 		if e.Length < plaintextResidueAuditMin {
@@ -275,14 +351,9 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 	if len(candidates) == 0 {
 		return nil
 	}
-	// Build index from entry VAddr → entry for fast lookup
-	entryByVA := make(map[uint64]Entry, len(entries))
-	for _, e := range entries {
-		entryByVA[e.VAddr] = e
-	}
 	out := make([]LazyDispatchEntry, 0, len(candidates))
 	for _, c := range candidates {
-		e, ok := entryByVA[c.StringVAddr]
+		e, ok := findRuntimeEntryForVA(entries, c.StringVAddr)
 		if !ok {
 			continue
 		}
@@ -312,6 +383,29 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			Variant:    e.Variant & 0x0f,
 			OrigTarget: c.CallTarget,
 		})
+	}
+	return out
+}
+
+func findRuntimeEntryForVA(entries []Entry, va uint64) (Entry, bool) {
+	for _, e := range entries {
+		if e.Length <= 0 || e.Section == "<decoy>" {
+			continue
+		}
+		end := e.VAddr + uint64(e.Length)
+		if e.VAddr <= va && va < end {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
+func lazyDispatchStringEntryVAs(dispatchEntries []LazyDispatchEntry, entries []Entry) map[uint64]struct{} {
+	out := make(map[uint64]struct{})
+	for _, de := range dispatchEntries {
+		if e, ok := findRuntimeEntryForVA(entries, de.StringVA); ok {
+			out[e.VAddr] = struct{}{}
+		}
 	}
 	return out
 }
@@ -360,6 +454,7 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 		binary.LittleEndian.PutUint64(payload[off+41:], 0) // zero pad[41..48]
 		binary.LittleEndian.PutUint64(payload[off+48:], de.OrigTarget)
 	}
+	binary.LittleEndian.PutUint64(payload[stubPayloadLenOff:], uint64(len(payload)))
 
 	// Rebuild the data array if payload grew
 	if uint64(len(payload)) > payloadPh.Filesz {

@@ -199,11 +199,14 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		callsiteSelected = len(selectedLazyCandidates)
 	}
 	out := bytes.Clone(raw)
+	var dispatchEntries []LazyDispatchEntry
+	if callsiteMode == callsiteModeAArch64LazyDecrypt {
+		dispatchEntries = buildLazyDispatchEntries(selectedLazyCandidates, runtimeEntries, meta)
+		callsiteSelected = len(dispatchEntries)
+	}
 	lazyStringVAs := make(map[uint64]struct{})
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
-		for _, c := range selectedLazyCandidates {
-			lazyStringVAs[c.StringVAddr] = struct{}{}
-		}
+		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
 	}
 	for _, e := range runtimeEntries {
 		if e.Length == 0 {
@@ -220,11 +223,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	}
 
 	// Lazy decrypt: patch callsite BLs and append dispatch table
-	var dispatchEntries []LazyDispatchEntry
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
-		selected := selectedLazyCandidates
-		callsiteSelected = len(selected)
-		dispatchEntries = buildLazyDispatchEntries(selected, runtimeEntries, meta)
 		if len(dispatchEntries) > 0 {
 			patchedCallsites := 0
 			// Find the runtime payload VA from the RWX LOAD segment that
@@ -520,6 +519,21 @@ func ValidateManifestPlaintextSlots(m *Manifest, inputPath, outputPath string) e
 		entries = filtered
 	}
 	return validateNoPlaintextResidue(inputRaw, outputRaw, entries)
+}
+
+func ValidateManifestRuntimeDispatch(m *Manifest, outputPath string) error {
+	if m.Protection.CallsiteMode != callsiteModeAArch64LazyDecrypt {
+		return nil
+	}
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	return validateInjectedOutputLazyDispatch(outputRaw)
+}
+
+func ManifestRequiresRuntimeDispatchAudit(m *Manifest) bool {
+	return m.Protection.CallsiteMode == callsiteModeAArch64LazyDecrypt
 }
 
 func ReadManifest(path string) (*Manifest, error) {

@@ -227,6 +227,16 @@ func runManifest(args []string) {
 		} else {
 			fmt.Println("plaintext_slots: ok")
 		}
+		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
+			if err := elfstr.ValidateManifestRuntimeDispatch(m, outputPath); err != nil {
+				fmt.Printf("runtime_dispatch: invalid (%v)\n", err)
+				if *strict {
+					fatalText("manifest runtime dispatch audit invalid")
+				}
+			} else {
+				fmt.Println("runtime_dispatch: ok")
+			}
+		}
 	}
 	fmt.Printf("entries: %d (%d bytes)\n", m.EntryCount, m.EncryptedSize)
 	if m.Report.Preset != "" {
