@@ -82,6 +82,18 @@ func TestApplyEncryptFlagOverridesOnlyVisitsExplicitFlags(t *testing.T) {
 	}
 }
 
+func TestValidateEncryptReportFlagsRejectsJSONWithoutReport(t *testing.T) {
+	if err := validateEncryptReportFlags(false, true); err == nil {
+		t.Fatalf("expected -json without -report to fail")
+	}
+	if err := validateEncryptReportFlags(true, true); err != nil {
+		t.Fatalf("expected -report -json to pass: %v", err)
+	}
+	if err := validateEncryptReportFlags(false, false); err != nil {
+		t.Fatalf("expected default flags to pass: %v", err)
+	}
+}
+
 func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "out.manifest.json")
@@ -121,5 +133,32 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	}
 	if _, ok := decoded["checks"]; !ok {
 		t.Fatalf("audit json missing checks: %s", raw)
+	}
+}
+
+func TestProtectionReportJSONFieldNames(t *testing.T) {
+	report := elfstr.ProtectionReport{
+		Preset:             elfstr.PresetBalanced,
+		ControlFlowLevel:   2,
+		FailurePolicy:      "safe-exit",
+		Strings:            3,
+		Bytes:              42,
+		CallsiteCandidates: 5,
+		CallsiteSelected:   2,
+		CallsiteSkipped:    3,
+		CallsiteMode:       "aarch64-lazy-dry-run-no-patch",
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	for _, key := range []string{"preset", "control_flow_level", "failure_policy", "strings", "bytes", "callsite_candidates", "callsite_selected", "callsite_skipped", "callsite_mode"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("report json missing %s: %s", key, raw)
+		}
 	}
 }

@@ -65,6 +65,7 @@ func runEncrypt(args []string) {
 	preset := fs.String("preset", elfstr.PresetBalanced, "保护预设: safe, balanced, aggressive")
 	configPath := fs.String("config", "", "JSON 保护配置路径")
 	reportOnly := fs.Bool("report", false, "只打印保护计划，不写入输出文件")
+	jsonOutput := fs.Bool("json", false, "以 JSON 输出保护计划；仅与 -report 一起使用")
 	minLen := fs.Int("min", 6, "最小字符串长度")
 	includeData := fs.Bool("data", false, "同时加密 .data 段")
 	watermark := fs.String("watermark", "", "可选水印标识，将以哈希形式嵌入")
@@ -93,6 +94,9 @@ func runEncrypt(args []string) {
 	if *configPath != "" && !flagWasSet(fs, "preset") {
 		configPreset = ""
 	}
+	if err := validateEncryptReportFlags(*reportOnly, *jsonOutput); err != nil {
+		fatal(err)
+	}
 	cfg, err := elfstr.LoadProtectionConfig(*configPath, configPreset)
 	if err != nil {
 		fatal(err)
@@ -117,7 +121,11 @@ func runEncrypt(args []string) {
 		if err != nil {
 			fatal(err)
 		}
-		printProtectionReport(report)
+		if *jsonOutput {
+			printProtectionReportJSON(report)
+		} else {
+			printProtectionReport(report)
+		}
 		return
 	}
 	m, err := elfstr.EncryptFile(inputPath, outputPath, manifestPath, opts)
@@ -144,6 +152,13 @@ func applyEncryptFlagOverrides(fs *flag.FlagSet, opts *elfstr.Options, overrides
 	})
 }
 
+func validateEncryptReportFlags(reportOnly, jsonOutput bool) error {
+	if jsonOutput && !reportOnly {
+		return fmt.Errorf("-json 只能与 -report 一起使用")
+	}
+	return nil
+}
+
 func flagWasSet(fs *flag.FlagSet, name string) bool {
 	seen := false
 	fs.Visit(func(f *flag.Flag) {
@@ -163,6 +178,14 @@ func printProtectionReport(report *elfstr.ProtectionReport) {
 	for _, warning := range report.Warnings {
 		fmt.Printf("警告: %s\n", warning)
 	}
+}
+
+func printProtectionReportJSON(report *elfstr.ProtectionReport) {
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Println(string(raw))
 }
 
 type manifestAudit struct {
@@ -416,11 +439,11 @@ func usage() {
 命令:
   inspect [选项] <input.elf>
   encrypt [-preset safe|balanced|aggressive] [-config protection.json] [选项] <input.elf>
-  manifest [-strict] <manifest.json>
+  manifest [-strict] [-json] <manifest.json>
   verify <manifest.json>
 
 说明:
-  -report 只打印保护计划，不写入输出文件。
+  encrypt -report -json 会以机器可读 JSON 输出保护计划。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
   manifest 会打印保护元数据，并在输出文件可访问时校验 output_sha256。
   verify 等价于 manifest -strict。`)
