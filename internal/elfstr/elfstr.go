@@ -43,25 +43,26 @@ type Options struct {
 }
 
 type Manifest struct {
-	Schema        string            `json:"schema"`
-	Tool          string            `json:"tool"`
-	GeneratedUTC  string            `json:"generated_utc"`
-	BuildID       string            `json:"build_id"`
-	WatermarkHash string            `json:"watermark_hash,omitempty"`
-	Protection    ProtectionProfile `json:"protection"`
-	Config        ProtectionConfig  `json:"config,omitempty"`
-	Report        ProtectionReport  `json:"report,omitempty"`
-	Options       ManifestOptions   `json:"options,omitempty"`
-	RuntimeStub   RuntimeStubInfo   `json:"runtime_stub,omitempty"`
-	InputPath     string            `json:"input_path"`
-	OutputPath    string            `json:"output_path"`
-	InputSHA256   string            `json:"input_sha256"`
-	OutputSHA256  string            `json:"output_sha256"`
-	MinLen        int               `json:"min_len"`
-	IncludeData   bool              `json:"include_data"`
-	EntryCount    int               `json:"entry_count"`
-	EncryptedSize int               `json:"encrypted_size"`
-	Entries       []Entry           `json:"entries"`
+	Schema         string            `json:"schema"`
+	Tool           string            `json:"tool"`
+	GeneratedUTC   string            `json:"generated_utc"`
+	BuildID        string            `json:"build_id"`
+	WatermarkHash  string            `json:"watermark_hash,omitempty"`
+	Protection     ProtectionProfile `json:"protection"`
+	Config         ProtectionConfig  `json:"config,omitempty"`
+	Report         ProtectionReport  `json:"report,omitempty"`
+	Options        ManifestOptions   `json:"options,omitempty"`
+	RuntimeStub    RuntimeStubInfo   `json:"runtime_stub,omitempty"`
+	InputPath      string            `json:"input_path"`
+	OutputPath     string            `json:"output_path"`
+	InputSHA256    string            `json:"input_sha256"`
+	OutputSHA256   string            `json:"output_sha256"`
+	ManifestSHA256 string            `json:"manifest_sha256,omitempty"`
+	MinLen         int               `json:"min_len"`
+	IncludeData    bool              `json:"include_data"`
+	EntryCount     int               `json:"entry_count"`
+	EncryptedSize  int               `json:"encrypted_size"`
+	Entries        []Entry           `json:"entries"`
 }
 
 type ManifestOptions struct {
@@ -155,6 +156,9 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	entries, err = prepareRuntimeEntries(entries)
 	if err != nil {
 		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no protected strings found; adjust -min, -data, -safe-scan, or preset")
 	}
 	meta := RuntimeMeta{
 		BuildID:          buildID,
@@ -564,6 +568,31 @@ func ReadManifest(path string) (*Manifest, error) {
 	return &m, nil
 }
 
+func ComputeManifestSHA256(m *Manifest) (string, error) {
+	canonical := *m
+	canonical.ManifestSHA256 = ""
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func ValidateManifestSelfHash(m *Manifest) error {
+	if m.ManifestSHA256 == "" {
+		return fmt.Errorf("manifest self hash missing")
+	}
+	got, err := ComputeManifestSHA256(m)
+	if err != nil {
+		return err
+	}
+	if got != m.ManifestSHA256 {
+		return fmt.Errorf("manifest self hash mismatch: got %s want %s", got, m.ManifestSHA256)
+	}
+	return nil
+}
+
 func wantedSection(name string, includeData bool, safeScan bool) bool {
 	switch name {
 	case ".rodata":
@@ -858,6 +887,11 @@ func isCompatStringCandidate(s []byte, minLen int) bool {
 }
 
 func writeManifest(path string, m *Manifest) error {
+	sum, err := ComputeManifestSHA256(m)
+	if err != nil {
+		return err
+	}
+	m.ManifestSHA256 = sum
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err

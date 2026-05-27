@@ -227,6 +227,15 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 	if outputPath != m.OutputPath {
 		audit.OutputResolved = outputPath
 	}
+	if err := elfstr.ValidateManifestSelfHash(m); err != nil {
+		status := "invalid"
+		if m.ManifestSHA256 == "" {
+			status = "unavailable"
+		}
+		audit.Checks = append(audit.Checks, auditCheck{Name: "manifest_sha256", Status: status, Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "manifest_sha256", Status: "ok", Detail: m.ManifestSHA256})
+	}
 	raw, err := os.ReadFile(outputPath)
 	if err != nil {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "unavailable", Detail: err.Error()})
@@ -308,6 +317,7 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 
 func printAuditCheck(check auditCheck) {
 	labels := map[string]string{
+		"manifest_sha256":  "manifest_sha256",
 		"output_sha256":    "输出_sha256",
 		"output_structure": "输出结构",
 		"plaintext_slots":  "明文槽位",
@@ -320,7 +330,7 @@ func printAuditCheck(check auditCheck) {
 	}
 	switch check.Status {
 	case "ok":
-		if check.Name == "output_sha256" && check.Detail != "" {
+		if (check.Name == "output_sha256" || check.Name == "manifest_sha256") && check.Detail != "" {
 			fmt.Printf("%s: %s (ok)\n", label, check.Detail)
 		} else {
 			fmt.Printf("%s: ok\n", label)

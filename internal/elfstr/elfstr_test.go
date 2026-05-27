@@ -122,6 +122,29 @@ func TestAtomicWriterReplacesPrivateManifest(t *testing.T) {
 	}
 }
 
+func TestEncryptFileRejectsZeroProtectedStrings(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := dir + "/empty.elf"
+	raw := make([]byte, 0x300)
+	copy(raw, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
+	raw[0x10] = 2
+	raw[0x14] = 1
+	binary.LittleEndian.PutUint16(raw[0x12:], 183)
+	binary.LittleEndian.PutUint64(raw[0x18:], 0x180)
+	binary.LittleEndian.PutUint64(raw[0x20:], 0x40)
+	binary.LittleEndian.PutUint16(raw[0x36:], 56)
+	binary.LittleEndian.PutUint16(raw[0x38:], 2)
+	writePhdr64(raw, 0x40, elf64Phdr{Type: ptLoad, Flags: pfR | pfX, Off: 0, Vaddr: 0, Paddr: 0, Filesz: 0x300, Memsz: 0x300, Align: 0x1000})
+	writePhdr64(raw, 0x40+56, elf64Phdr{Type: ptGNUStack, Flags: pfR | pfW, Align: 0x10})
+	if err := os.WriteFile(inputPath, raw, 0o755); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	_, err := EncryptFile(inputPath, dir+"/out.vmp", dir+"/out.manifest.json", Options{})
+	if err == nil || !strings.Contains(err.Error(), "no protected strings found") {
+		t.Fatalf("expected zero protected strings error, got %v", err)
+	}
+}
+
 func TestRuntimeEntriesFilterDoesNotMutateTable(t *testing.T) {
 	entries := []Entry{
 		{Section: ".rodata", VAddr: 0x1000, Length: 8, Key: 1},
@@ -846,6 +869,28 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["report"]; !ok {
 		t.Fatalf("manifest json missing report: %s", raw)
+	}
+}
+
+func TestManifestSelfHashDetectsMetadataTamper(t *testing.T) {
+	m := &Manifest{
+		Schema:       Schema,
+		Tool:         "nbg-elf",
+		OutputPath:   "out.vmp",
+		OutputSHA256: "abc123",
+		EntryCount:   7,
+	}
+	sum, err := ComputeManifestSHA256(m)
+	if err != nil {
+		t.Fatalf("compute manifest hash: %v", err)
+	}
+	m.ManifestSHA256 = sum
+	if err := ValidateManifestSelfHash(m); err != nil {
+		t.Fatalf("validate manifest self hash: %v", err)
+	}
+	m.EntryCount++
+	if err := ValidateManifestSelfHash(m); err == nil {
+		t.Fatalf("expected manifest self hash mismatch after metadata tamper")
 	}
 }
 

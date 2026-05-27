@@ -120,6 +120,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["output_sha256"].Status != "unavailable" {
 		t.Fatalf("output_sha256 check = %+v", checks["output_sha256"])
 	}
+	if checks["manifest_sha256"].Status != "unavailable" {
+		t.Fatalf("manifest_sha256 check = %+v", checks["manifest_sha256"])
+	}
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
 	}
@@ -133,6 +136,38 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	}
 	if _, ok := decoded["checks"]; !ok {
 		t.Fatalf("audit json missing checks: %s", raw)
+	}
+}
+
+func TestBuildManifestAuditValidatesManifestSelfHash(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "out.manifest.json")
+	m := &elfstr.Manifest{
+		Schema:     elfstr.Schema,
+		InputPath:  "missing-input.elf",
+		OutputPath: "missing-output.vmp",
+	}
+	sum, err := elfstr.ComputeManifestSHA256(m)
+	if err != nil {
+		t.Fatalf("compute manifest hash: %v", err)
+	}
+	m.ManifestSHA256 = sum
+	audit := buildManifestAudit(manifestPath, m)
+	checks := map[string]auditCheck{}
+	for _, check := range audit.Checks {
+		checks[check.Name] = check
+	}
+	if checks["manifest_sha256"].Status != "ok" {
+		t.Fatalf("manifest_sha256 check = %+v", checks["manifest_sha256"])
+	}
+	m.OutputPath = "tampered.vmp"
+	audit = buildManifestAudit(manifestPath, m)
+	checks = map[string]auditCheck{}
+	for _, check := range audit.Checks {
+		checks[check.Name] = check
+	}
+	if checks["manifest_sha256"].Status != "invalid" {
+		t.Fatalf("manifest_sha256 tamper check = %+v", checks["manifest_sha256"])
 	}
 }
 
