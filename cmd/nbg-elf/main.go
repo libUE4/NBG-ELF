@@ -66,6 +66,7 @@ func runEncrypt(args []string) {
 	configPath := fs.String("config", "", "JSON 保护配置路径")
 	reportOnly := fs.Bool("report", false, "只打印保护计划，不写入输出文件")
 	jsonOutput := fs.Bool("json", false, "以 JSON 输出保护计划；仅与 -report 一起使用")
+	minGrade := fs.String("min-grade", "", "生成后要求最低审计等级: review-needed, hardened, commercial-ready")
 	minLen := fs.Int("min", 6, "最小字符串长度")
 	includeData := fs.Bool("data", false, "同时加密 .data 段")
 	watermark := fs.String("watermark", "", "可选水印标识，将以哈希形式嵌入")
@@ -131,6 +132,13 @@ func runEncrypt(args []string) {
 	m, err := elfstr.EncryptFile(inputPath, outputPath, manifestPath, opts)
 	if err != nil {
 		fatal(err)
+	}
+	if *minGrade != "" {
+		audit := buildManifestAudit(manifestPath, m)
+		if err := enforceMinimumAuditGrade(audit, *minGrade); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("[+] 审计等级: %s score=%d\n", audit.Summary.Grade, audit.Summary.Score)
 	}
 	fmt.Printf("[+] 已加密字符串: %d (%d 字节)\n", m.EntryCount, m.EncryptedSize)
 	fmt.Printf("[+] 保护预设: %s 控制流等级=%d 失败策略=%s\n", m.Report.Preset, m.Report.ControlFlowLevel, m.Report.FailurePolicy)
@@ -596,12 +604,12 @@ func usage() {
 
 命令:
   inspect [选项] <input.elf>
-  encrypt [-preset safe|balanced|aggressive] [-config protection.json] [选项] <input.elf>
+  encrypt [-preset safe|balanced|aggressive] [-min-grade hardened|commercial-ready] [选项] <input.elf>
   manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>
   verify [-min-grade hardened|commercial-ready] <manifest.json>
 
 说明:
-  encrypt -report -json 会以机器可读 JSON 输出保护计划。
+  encrypt -report -json 会以机器可读 JSON 输出保护计划；encrypt -min-grade 会在生成后执行审计门禁。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
   manifest 会打印保护元数据、审计评分，并在输出文件可访问时校验 output_sha256。
   verify 等价于 manifest -strict。`)

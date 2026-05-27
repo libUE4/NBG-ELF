@@ -276,6 +276,16 @@ func TestEnforceMinimumAuditGrade(t *testing.T) {
 	}
 }
 
+func TestEnforceMinimumAuditGradeErrorMentionsActualAndRequiredGrade(t *testing.T) {
+	err := enforceMinimumAuditGrade(manifestAudit{Summary: auditSummary{Grade: "hardened"}}, "commercial-ready")
+	if err == nil {
+		t.Fatalf("expected grade gate failure")
+	}
+	if got := err.Error(); got != "manifest audit grade hardened is below required commercial-ready" {
+		t.Fatalf("unexpected error %q", got)
+	}
+}
+
 func TestAuditGradeRankOrdering(t *testing.T) {
 	if !(auditGradeRank("blocked") < auditGradeRank("review-needed") &&
 		auditGradeRank("review-needed") < auditGradeRank("hardened") &&
