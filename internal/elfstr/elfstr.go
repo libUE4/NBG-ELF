@@ -525,7 +525,7 @@ func ValidateManifestRuntimeDispatch(m *Manifest, outputPath string) error {
 	if err != nil {
 		return err
 	}
-	return validateInjectedOutputLazyDispatch(outputRaw)
+	return validateInjectedOutputLazyDispatch(outputRaw, m.Protection.CallsiteLazySelected)
 }
 
 func ManifestRequiresRuntimeDispatchAudit(m *Manifest) bool {

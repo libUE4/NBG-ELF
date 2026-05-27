@@ -1062,13 +1062,16 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	out := appendLazyDispatchTable(data, []LazyDispatchEntry{de}, 0x100000)
 	payloadLen := uint64(len(out))
 	binary.LittleEndian.PutUint64(out[stubPayloadLenOff:], payloadLen)
-	if err := validateInjectedOutputLazyDispatch(out); err != nil {
+	if err := validateInjectedOutputLazyDispatch(out, 1); err != nil {
 		t.Fatalf("validate lazy dispatch failed: %v", err)
+	}
+	if err := validateInjectedOutputLazyDispatch(out, 2); err == nil {
+		t.Fatalf("accepted lazy dispatch count mismatch")
 	}
 
 	corruptPtr := append([]byte(nil), out...)
 	binary.LittleEndian.PutUint64(corruptPtr[stubLazyTableOff:], 0x999)
-	if err := validateInjectedOutputLazyDispatch(corruptPtr); err == nil {
+	if err := validateInjectedOutputLazyDispatch(corruptPtr, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch table before payload")
 	}
 
@@ -1076,19 +1079,19 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	tableVA := binary.LittleEndian.Uint64(corruptLen[stubLazyTableOff:])
 	base := int(tableVA - 0x100000)
 	binary.LittleEndian.PutUint32(corruptLen[base+16:], 0)
-	if err := validateInjectedOutputLazyDispatch(corruptLen); err == nil {
+	if err := validateInjectedOutputLazyDispatch(corruptLen, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with zero length")
 	}
 
 	corruptPad := append([]byte(nil), out...)
 	corruptPad[base+41] = 0xff
-	if err := validateInjectedOutputLazyDispatch(corruptPad); err == nil {
+	if err := validateInjectedOutputLazyDispatch(corruptPad, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
 	}
 
 	corruptCallsite := append([]byte(nil), out...)
 	binary.LittleEndian.PutUint32(corruptCallsite[0x100:], 0xd503201f)
-	if err := validateInjectedOutputLazyDispatch(corruptCallsite); err == nil {
+	if err := validateInjectedOutputLazyDispatch(corruptCallsite, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with unpatched callsite")
 	}
 }

@@ -247,12 +247,12 @@ func validateInjectedOutput(data []byte, keepSections bool) error {
 	return nil
 }
 
-func validateInjectedOutputLazyDispatch(data []byte) error {
+func validateInjectedOutputLazyDispatch(data []byte, expectedEntries int) error {
 	ph, payloadRaw, declaredLen, err := findRuntimePayload(data)
 	if err != nil {
 		return err
 	}
-	entries, err := validateLazyDispatchMetadata(payloadRaw, ph.Vaddr, declaredLen)
+	entries, err := validateLazyDispatchMetadata(payloadRaw, ph.Vaddr, declaredLen, expectedEntries)
 	if err != nil {
 		return err
 	}
@@ -325,11 +325,17 @@ func validateRuntimeTableMetadata(payloadRaw []byte, expectedEntries int) error 
 	return nil
 }
 
-func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint64) ([]LazyDispatchEntry, error) {
+func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint64, expectedEntries int) ([]LazyDispatchEntry, error) {
+	if expectedEntries < 0 {
+		return nil, fmt.Errorf("expected lazy dispatch count must be >= 0")
+	}
 	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
 		return nil, fmt.Errorf("runtime payload too small for lazy dispatch metadata")
 	}
 	lazyCount := binary.LittleEndian.Uint32(payloadRaw[stubLazyCountOff:])
+	if uint64(lazyCount) != uint64(expectedEntries) {
+		return nil, fmt.Errorf("lazy dispatch entry count got %d want %d", lazyCount, expectedEntries)
+	}
 	lazyTableVA := binary.LittleEndian.Uint64(payloadRaw[stubLazyTableOff:])
 	if lazyCount == 0 {
 		if lazyTableVA != 0 && lazyTableVA != 0x123456789abcdef0 {
