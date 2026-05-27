@@ -433,6 +433,10 @@ func TestCallsiteControlFlowLabel(t *testing.T) {
 	if dryRun != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan; cfg-level-aggressive; runtime-state-dispatch; honeypot-branch-fanout; aarch64-callsite-lazy-dry-run" {
 		t.Errorf("dry-run label got %q", dryRun)
 	}
+	lazy := callsiteControlFlowLabel(callsiteModeAArch64LazyDecrypt, 3)
+	if lazy != "opaque-branches-per-entry-loop; aarch64-callsite-candidate-scan; cfg-level-aggressive; runtime-state-dispatch; honeypot-branch-fanout; aarch64-callsite-lazy-decrypt; lazy-dispatch-randomized" {
+		t.Errorf("lazy label got %q", lazy)
+	}
 }
 
 func TestLimitCallsiteCandidates(t *testing.T) {
@@ -651,6 +655,32 @@ func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
 	lazyVAs := lazyDispatchStringEntryVAs(dispatch, entries)
 	if _, ok := lazyVAs[0x5000]; !ok || len(lazyVAs) != 1 {
 		t.Fatalf("lazy dispatch VA map = %#v", lazyVAs)
+	}
+}
+
+func TestShuffleLazyDispatchEntriesPreservesEntrySet(t *testing.T) {
+	entries := []LazyDispatchEntry{
+		{TextVA: 0x1000, StringVA: 0x2000, Length: 4, OrigTarget: 0x3000},
+		{TextVA: 0x1010, StringVA: 0x2010, Length: 5, OrigTarget: 0x3010},
+		{TextVA: 0x1020, StringVA: 0x2020, Length: 6, OrigTarget: 0x3020},
+	}
+	before := make(map[uint64]LazyDispatchEntry, len(entries))
+	for _, e := range entries {
+		before[e.TextVA] = e
+	}
+	shuffleLazyDispatchEntries(entries)
+	if len(entries) != len(before) {
+		t.Fatalf("entry count changed to %d", len(entries))
+	}
+	for _, e := range entries {
+		want, ok := before[e.TextVA]
+		if !ok || want != e {
+			t.Fatalf("shuffle changed entry set: got=%+v want=%+v ok=%v", e, want, ok)
+		}
+		delete(before, e.TextVA)
+	}
+	if len(before) != 0 {
+		t.Fatalf("shuffle dropped entries: %#v", before)
 	}
 }
 

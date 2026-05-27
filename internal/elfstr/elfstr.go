@@ -301,6 +301,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if opts.SafeScan {
 		controlFlow += "; safe-scan-test"
 	}
+	runtimeTable := "encrypted-per-entry-row-resealed"
+	if callsiteMode == callsiteModeAArch64LazyDecrypt {
+		runtimeTable += "; lazy-dispatch-table-randomized"
+	}
 	report := ProtectionReport{
 		Preset:             effectivePreset(opts.Preset),
 		ControlFlowLevel:   controlFlowLevel,
@@ -363,7 +367,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			StageCount:             runtimeStageCount + controlFlowLevel - 1,
 			KeyScope:               "per-string-salted-variant",
 			KeyMaterial:            "xorshift-split-runtime-seed-uint32-per-entry-salt",
-			RuntimeTable:           "encrypted-per-entry-row-resealed",
+			RuntimeTable:           runtimeTable,
 			TableOrder:             "per-build-stage-shuffle-random-decoy-clusters",
 			DecoyCount:             decoyCount,
 			EntryEncoding:          "xorshift-arx-per-entry-salt-variant-cfg",
@@ -411,7 +415,7 @@ func callsiteControlFlowLabel(mode string, level int) string {
 		return base + "; aarch64-callsite-lazy-dry-run"
 	}
 	if mode == callsiteModeAArch64LazyDecrypt {
-		return base + "; aarch64-callsite-lazy-decrypt"
+		return base + "; aarch64-callsite-lazy-decrypt; lazy-dispatch-randomized"
 	}
 	return base
 }

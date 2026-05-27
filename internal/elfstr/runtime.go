@@ -432,7 +432,18 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			OrigTarget: c.CallTarget,
 		})
 	}
+	shuffleLazyDispatchEntries(out)
 	return out
+}
+
+func shuffleLazyDispatchEntries(entries []LazyDispatchEntry) {
+	for i := len(entries) - 1; i > 0; i-- {
+		j, err := randomIndex(i + 1)
+		if err != nil {
+			continue
+		}
+		entries[i], entries[j] = entries[j], entries[i]
+	}
 }
 
 func findRuntimeEntryForVA(entries []Entry, va uint64) (Entry, bool) {
