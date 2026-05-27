@@ -70,6 +70,30 @@ func TestLoadProtectionConfigRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestLoadProtectionConfigRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(path, []byte(`{"lazy_callsitte": true}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadProtectionConfig(path, PresetBalanced)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown field error, got %v", err)
+	}
+}
+
+func TestLoadProtectionConfigRejectsTrailingJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(path, []byte(`{"preset":"safe"} {"preset":"aggressive"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadProtectionConfig(path, "")
+	if err == nil || !strings.Contains(err.Error(), "single JSON object") {
+		t.Fatalf("expected trailing JSON error, got %v", err)
+	}
+}
+
 func TestProtectionConfigApplyToOptions(t *testing.T) {
 	cfg := ProtectionConfig{
 		Preset:            PresetAggressive,

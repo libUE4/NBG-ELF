@@ -1,8 +1,10 @@
 package elfstr
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -97,8 +99,17 @@ func LoadProtectionConfig(path, preset string) (ProtectionConfig, error) {
 		return ProtectionConfig{}, err
 	}
 	var fileCfg protectionConfigJSON
-	if err := json.Unmarshal(raw, &fileCfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&fileCfg); err != nil {
 		return ProtectionConfig{}, err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return ProtectionConfig{}, err
+		}
+		return ProtectionConfig{}, fmt.Errorf("protection config must contain a single JSON object")
 	}
 	if fileCfg.Preset != nil && preset == "" {
 		cfg, err = DefaultProtectionConfig(*fileCfg.Preset)
