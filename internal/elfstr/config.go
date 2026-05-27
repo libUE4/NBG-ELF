@@ -255,13 +255,13 @@ func effectiveFailurePolicy(policy string) string {
 func protectionWarnings(opts Options, candidates, selected int) []string {
 	var warnings []string
 	if opts.LazyCallsite && selected == 0 {
-		warnings = append(warnings, "lazy callsite patching requested but no conservative candidates were selected")
+		warnings = append(warnings, "已请求 lazy 调用点补丁，但没有选中保守候选")
 	}
 	if opts.LazyCallsiteLimit > 0 && candidates > selected {
-		warnings = append(warnings, "lazy callsite candidates were limited by configuration")
+		warnings = append(warnings, "lazy 调用点候选已被配置上限限制")
 	}
 	if opts.KeepSections {
-		warnings = append(warnings, "section headers are kept for compatibility and reduce static-analysis resistance")
+		warnings = append(warnings, "为兼容性保留了节表，抗静态分析能力会降低")
 	}
 	return warnings
 }

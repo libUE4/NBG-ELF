@@ -1,31 +1,31 @@
-# Repository Guidelines
+# 仓库指南
 
-## Project Structure & Module Organization
+## 项目结构与模块组织
 
-This is a Go 1.22 CLI module named `nbg-elf`. The entry point lives in `cmd/nbg-elf/main.go` and exposes `inspect`, `encrypt`, `manifest`, and `verify`. Core ELF scanning, encryption, manifest handling, runtime injection, and AArch64 callsite logic are in `internal/elfstr/`. Embedded runtime bytes and their Go wrapper are in `internal/assets/`. ARM64 runtime stub source and linker script are in `stub/arm64/`. The `build/` directory contains generated binaries, manifests, and stub objects; treat it as output unless intentionally refreshing artifacts.
+这是 Go 1.22 CLI 模块，模块名为 `nbg-elf`。入口在 `cmd/nbg-elf/main.go`，提供 `inspect`、`encrypt`、`manifest`、`verify` 等命令。核心 ELF 扫描、字符串加密、manifest、运行时注入和 AArch64 调用点逻辑位于 `internal/elfstr/`。嵌入的 runtime 字节和 Go 包装位于 `internal/assets/`。ARM64 runtime stub 汇编源码和链接脚本位于 `stub/arm64/`。`build/` 是本地构建和样本输出目录，除非明确刷新产物，否则不要提交。
 
-Tests are colocated with the code they exercise, using Go `_test.go` files such as `cmd/nbg-elf/main_test.go` and `internal/elfstr/elfstr_test.go`.
+测试与被测代码放在同一包内，使用 Go `_test.go` 文件，例如 `cmd/nbg-elf/main_test.go` 和 `internal/elfstr/elfstr_test.go`。
 
-## Build, Test, and Development Commands
+## 构建、测试与开发命令
 
-- `go test ./...`: run all unit tests across the CLI and internal packages.
-- `go test ./internal/elfstr -run TestName`: run a focused package test while iterating.
-- `go build -o build/nbg-elf ./cmd/nbg-elf`: build the CLI into `build/`.
-- `go run ./cmd/nbg-elf --help`: run the CLI locally without creating a binary.
-- `go run ./cmd/nbg-elf inspect -min 6 <input.elf>`: scan an ELF for candidate strings.
+- `go test ./...`：运行 CLI 和内部包的全部单元测试。
+- `go test ./internal/elfstr -run TestName`：迭代时运行指定包的单个测试。
+- `go build -o build/nbg-elf ./cmd/nbg-elf`：构建 CLI 到 `build/`。
+- `go run ./cmd/nbg-elf --help`：不生成二进制，直接运行本地 CLI。
+- `go run ./cmd/nbg-elf encrypt -preset aggressive -report <input.elf>`：只输出保护计划，不写文件。
 
-## Coding Style & Naming Conventions
+## 代码风格与命名约定
 
-Use standard Go formatting: tabs for indentation and `gofmt` before committing. Keep package names short and lowercase. Export identifiers only when they are part of a package boundary; prefer unexported helpers inside `internal/elfstr`. Tests should use descriptive names like `TestResolveManifestOutputPath`. Keep command flags lowercase and hyphenated, matching existing examples such as `-manifest-detail` and `-lazy-callsite-limit`.
+使用标准 Go 格式，提交前运行 `gofmt`。缩进使用 tab。包名保持短小、小写。只有跨包边界需要的符号才导出；`internal/elfstr` 内优先使用未导出 helper。测试名使用描述性形式，例如 `TestResolveManifestOutputPath`。命令行 flag 保持小写和连字符风格，例如 `-manifest-detail`、`-lazy-callsite-limit`。
 
-## Testing Guidelines
+## 测试要求
 
-Use Go's built-in `testing` package. Add focused unit tests beside the changed package, especially for manifest resolution, ELF parsing, encryption option validation, and AArch64 callsite behavior. Prefer `t.TempDir()` for filesystem tests. When modifying output validation or manifests, run `go test ./...` and include at least one strict-path or error-case test.
+使用 Go 内置 `testing` 包。修改 manifest、输出结构、runtime 注入、AArch64 callsite 或配置解析时，必须增加聚焦测试。文件系统测试优先使用 `t.TempDir()`。修改保护输出后至少运行 `go test ./...`，并用 `/tmp` 输出路径做一次样本 `encrypt` 与 `verify`，避免污染仓库。
 
-## Commit & Pull Request Guidelines
+## 提交与 Pull Request 指南
 
-This checkout does not include `.git` history, so no repository-specific commit convention can be verified locally. Use short, imperative commit subjects such as `Add manifest validation test` or `Fix lazy callsite limit handling`. Pull requests should describe the behavior change, list commands run, mention generated artifacts touched under `build/`, and link relevant issues. Include terminal output snippets for CLI behavior changes and explain any compatibility impact for existing manifests or encrypted ELF outputs.
+提交信息使用简短祈使句，例如 `Add manifest validation test` 或 `Validate lazy dispatch metadata`。PR 需要说明行为变化、列出验证命令、标明是否触碰 `build/` 产物，并解释对既有 manifest 或已保护 ELF 的兼容影响。CLI 输出变化应附关键终端片段。
 
-## Security & Configuration Tips
+## 安全与配置提示
 
-Avoid committing private ELF samples, watermarks, or sensitive manifests. Manifest detail mode may expose per-string offsets and hashes, so use it only when needed for diagnostics.
+不要提交私有 ELF、客户样本、水印、密钥或敏感 manifest。`manifest-detail` 会暴露字符串偏移和哈希，仅在诊断时使用。保护器目标是合法软件加固，不实现持久化、破坏性行为或恶意规避能力。

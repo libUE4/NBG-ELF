@@ -87,7 +87,7 @@ func TestProtectionConfigApplyToOptions(t *testing.T) {
 
 func TestProtectionWarningsIncludeSkippedCallsites(t *testing.T) {
 	warnings := protectionWarnings(Options{LazyCallsiteLimit: 2}, 5, 2)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "limited") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "上限") {
 		t.Fatalf("warnings = %#v", warnings)
 	}
 }
