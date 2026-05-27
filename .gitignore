@@ -1,0 +1,8 @@
+build/
+*.vmp
+*.manifest.json
+*.elf
+*.o
+*.test
+coverage.out
+.DS_Store

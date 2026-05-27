@@ -1,0 +1,881 @@
+package elfstr
+
+import (
+	"bytes"
+	"debug/elf"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"sort"
+
+	"nbg-elf/internal/assets"
+)
+
+const (
+	stubEntryOff            = 0x50
+	stubLazyEntryOff        = 0xef0
+	stubHoneypotEntryOff    = 0x10cc
+	stubAnchorOff           = 0x1168
+	stubStaticVAOff         = 0x1170
+	stubOrigEntryOff        = 0x1178
+	stubPageVAOff           = 0x1180
+	stubPageLenOff          = 0x1188
+	stubPayloadLenOff       = 0x1190
+	stubEntryCountOff       = 0x1198
+	stubGuardSeedOff        = 0x119c
+	stubTableSeedOff        = 0x11a0
+	stubKeySeedOff          = 0x11a4
+	stubParamTableAOff      = 0x11a8
+	stubParamTableBOff      = 0x11ac
+	stubParamKeyIndexOff    = 0x11b0
+	stubParamStringPosOff   = 0x11b4
+	stubParamStringIndexOff = 0x11b8
+	stubGuardHashOff        = 0x11bc
+	stubOrigEntryKeyOff     = 0x11c0
+	stubTableOff            = 0x11c8
+	stubTableEntSize        = 24
+	stubLazyCountOff        = 0x11e0
+	stubLazyTableOff        = 0x11e8
+	stubLazyEntSize         = 56
+
+	ptLoad     = uint32(1)
+	ptNote     = uint32(4)
+	ptGNUStack = uint32(0x6474e551)
+	pfX        = uint32(1)
+	pfW        = uint32(2)
+	pfR        = uint32(4)
+)
+
+type RuntimeMeta struct {
+	BuildID          string
+	WatermarkHash    string
+	RandomPad        []byte
+	TableSeed        uint32
+	KeySeed          uint32
+	ParamTableA      uint32
+	ParamTableB      uint32
+	ParamKeyIndex    uint32
+	ParamStringPos   uint32
+	ParamStringIndex uint32
+	GuardSeed        uint32
+	GuardHash        uint32
+	OrigEntryKey     uint64
+	NoAntiFridaExtra bool
+}
+
+func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]byte, error) {
+	if len(entries) == 0 {
+		return data, nil
+	}
+	if len(data) < 0x40 {
+		return nil, fmt.Errorf("file too small")
+	}
+	if err := validateEmbeddedStubLayout(); err != nil {
+		return nil, err
+	}
+	f, err := elf.NewFile(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if f.Machine != elf.EM_AARCH64 {
+		return nil, fmt.Errorf("runtime decryptor only supports ARM64 ELF")
+	}
+	if len(entries) > 0xffff {
+		return nil, fmt.Errorf("too many string entries: %d", len(entries))
+	}
+
+	ehdr := readEhdr64(data)
+	loadAlign := maxLoadAlign(data, ehdr)
+	payloadOff := alignUp(uint64(len(data)), loadAlign)
+	payloadVA := choosePayloadVA(data, ehdr, loadAlign, payloadOff)
+	origEntry := binary.LittleEndian.Uint64(data[0x18:])
+
+	stub := append([]byte(nil), assets.StrdecBlob...)
+	if len(stub) < stubTableOff {
+		return nil, fmt.Errorf("runtime stub too small")
+	}
+	if meta.TableSeed == 0 {
+		meta.TableSeed, err = randomUint32()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if meta.KeySeed == 0 {
+		meta.KeySeed, err = randomUint32()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := fillRuntimeParams(&meta); err != nil {
+		return nil, err
+	}
+	table := buildRuntimeStringTable(entries, meta.KeySeed, meta.ParamKeyIndex)
+	cryptRuntimeTable(table, meta.TableSeed, meta.ParamTableA, meta.ParamTableB)
+	metaBlob := buildRuntimeMeta(meta)
+	payload := make([]byte, 0, stubTableOff+len(table)+len(metaBlob))
+	payload = append(payload, stub[:stubTableOff]...)
+	payload = append(payload, table...)
+	payload = append(payload, metaBlob...)
+	for len(payload)%16 != 0 {
+		payload = append(payload, 0)
+	}
+	if meta.NoAntiFridaExtra {
+		disableAntiFridaExtra(payload)
+	}
+	if err := randomizeStubPlaceholders(payload); err != nil {
+		return nil, err
+	}
+	pageVA, pageLen := stringPageWindow(entries)
+	binary.LittleEndian.PutUint64(payload[stubStaticVAOff:], payloadVA+stubAnchorOff)
+	binary.LittleEndian.PutUint64(payload[stubOrigEntryOff:], origEntry^meta.OrigEntryKey)
+	binary.LittleEndian.PutUint64(payload[stubOrigEntryKeyOff:], meta.OrigEntryKey)
+	binary.LittleEndian.PutUint64(payload[stubPageVAOff:], pageVA)
+	binary.LittleEndian.PutUint64(payload[stubPageLenOff:], pageLen)
+	binary.LittleEndian.PutUint32(payload[stubEntryCountOff:], uint32(len(entries)))
+	binary.LittleEndian.PutUint32(payload[stubTableSeedOff:], encodeTableSeed(meta.TableSeed))
+	binary.LittleEndian.PutUint32(payload[stubKeySeedOff:], encodeKeySeed(meta.KeySeed))
+	binary.LittleEndian.PutUint32(payload[stubParamTableAOff:], meta.ParamTableA)
+	binary.LittleEndian.PutUint32(payload[stubParamTableBOff:], meta.ParamTableB)
+	binary.LittleEndian.PutUint32(payload[stubParamKeyIndexOff:], meta.ParamKeyIndex)
+	binary.LittleEndian.PutUint32(payload[stubParamStringPosOff:], meta.ParamStringPos)
+	binary.LittleEndian.PutUint32(payload[stubParamStringIndexOff:], meta.ParamStringIndex)
+	binary.LittleEndian.PutUint32(payload[stubGuardSeedOff:], meta.GuardSeed)
+	meta.GuardHash = computeRuntimeGuardHash(payload[stubEntryOff:stubAnchorOff], meta.GuardSeed)
+	binary.LittleEndian.PutUint32(payload[stubGuardHashOff:], meta.GuardHash)
+	if len(payload)%16 != 0 {
+		panic("runtime payload must stay 16-byte aligned")
+	}
+	binary.LittleEndian.PutUint64(payload[stubPayloadLenOff:], uint64(len(payload)))
+
+	targetIdx := findReusablePhdr(data, ehdr)
+	if targetIdx < 0 {
+		return nil, fmt.Errorf("no reusable program header found (need PT_GNU_STACK or PT_NOTE)")
+	}
+	newData := append([]byte(nil), data...)
+	if uint64(len(newData)) < payloadOff {
+		padLen := int(payloadOff) - len(newData)
+		pad, err := randomBytes(padLen)
+		if err != nil {
+			return nil, err
+		}
+		newData = append(newData, pad...)
+	}
+	newData = append(newData, payload...)
+
+	phOff := ehdr.Phoff + uint64(targetIdx)*uint64(ehdr.Phentsize)
+	writePhdr64(newData, phOff, elf64Phdr{
+		Type:   ptLoad,
+		Flags:  pfR | pfW | pfX,
+		Off:    payloadOff,
+		Vaddr:  payloadVA,
+		Paddr:  payloadVA,
+		Filesz: uint64(len(payload)),
+		Memsz:  uint64(len(payload)),
+		Align:  loadAlign,
+	})
+	sortLoadPhdrs(newData, ehdr)
+	binary.LittleEndian.PutUint64(newData[0x18:], payloadVA+stubEntryOff)
+	return newData, nil
+}
+
+type LazyDispatchEntry struct {
+	TextVA     uint64
+	StringVA   uint64
+	Length     uint32
+	KeyState   uint32
+	PosParam   uint32
+	IdxParam   uint32
+	SaltA      uint32
+	SaltB      uint32
+	Variant    uint8
+	OrigTarget uint64
+}
+
+func validateInjectedOutput(data []byte, keepSections bool) error {
+	if len(data) < 0x40 || data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' {
+		return fmt.Errorf("output is not an ELF64 file")
+	}
+	ehdr := readEhdr64(data)
+	entry := binary.LittleEndian.Uint64(data[0x18:])
+	if !keepSections && (ehdr.Shoff != 0 || ehdr.Shentsize != 0 || ehdr.Shnum != 0 || ehdr.Shstrndx != 0) {
+		return fmt.Errorf("section headers were not stripped")
+	}
+	var payload *elf64Phdr
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type == ptLoad && ph.Flags == pfR|pfW|pfX {
+			p := ph
+			payload = &p
+			break
+		}
+	}
+	if payload == nil {
+		return fmt.Errorf("injected runtime payload LOAD segment not found")
+	}
+	if payload.Off+payload.Filesz > uint64(len(data)) {
+		return fmt.Errorf("runtime payload segment exceeds file size")
+	}
+	if entry != payload.Vaddr+stubEntryOff {
+		return fmt.Errorf("entrypoint got %#x want %#x", entry, payload.Vaddr+stubEntryOff)
+	}
+	payloadRaw := data[payload.Off : payload.Off+payload.Filesz]
+	if len(payloadRaw) <= stubPayloadLenOff+8 {
+		return fmt.Errorf("runtime payload too small for payload length field")
+	}
+	declaredLen := binary.LittleEndian.Uint64(payloadRaw[stubPayloadLenOff:])
+	if declaredLen == 0 || declaredLen > payload.Filesz {
+		return fmt.Errorf("runtime payload length field invalid: %#x filesz=%#x", declaredLen, payload.Filesz)
+	}
+	if len(payloadRaw) <= stubGuardHashOff+4 || len(payloadRaw) <= stubGuardSeedOff+4 || len(payloadRaw) < stubAnchorOff {
+		return fmt.Errorf("runtime payload too small for guard fields")
+	}
+	guardSeed := binary.LittleEndian.Uint32(payloadRaw[stubGuardSeedOff:])
+	guardHash := binary.LittleEndian.Uint32(payloadRaw[stubGuardHashOff:])
+	if want := computeRuntimeGuardHash(payloadRaw[stubEntryOff:stubAnchorOff], guardSeed); guardHash != want {
+		return fmt.Errorf("runtime guard hash mismatch: got %#x want %#x", guardHash, want)
+	}
+	return nil
+}
+
+func validateNoPlaintextResidue(raw, out []byte, entries []Entry) error {
+	for _, e := range entries {
+		if e.Length < plaintextResidueAuditMin {
+			continue
+		}
+		end := e.Offset + uint64(e.Length)
+		if end > uint64(len(raw)) {
+			return fmt.Errorf("plaintext audit entry out of input range: off=%#x len=%d", e.Offset, e.Length)
+		}
+		if end > uint64(len(out)) {
+			return fmt.Errorf("plaintext audit entry out of output range: off=%#x len=%d", e.Offset, e.Length)
+		}
+		plain := raw[e.Offset:end]
+		if bytes.Equal(out[e.Offset:end], plain) {
+			return fmt.Errorf("plaintext residue still present at protected slot: section=%s off=%#x vaddr=%#x len=%d sha256=%s", e.Section, e.Offset, e.VAddr, e.Length, e.SHA256)
+		}
+	}
+	return nil
+}
+
+func validateEmbeddedStubLayout() error {
+	if len(assets.StrdecBlob) < stubLazyTableOff+stubLazyEntSize {
+		return fmt.Errorf("runtime stub too small: len=%#x need=%#x", len(assets.StrdecBlob), stubLazyTableOff+stubLazyEntSize)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyCountOff:]) != 0x01234567 {
+		return fmt.Errorf("runtime stub lazy count placeholder mismatch at %#x", stubLazyCountOff)
+	}
+	if binary.LittleEndian.Uint64(assets.StrdecBlob[stubLazyTableOff:]) != 0x123456789abcdef0 {
+		return fmt.Errorf("runtime stub lazy table placeholder mismatch at %#x", stubLazyTableOff)
+	}
+	return nil
+}
+
+func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, meta RuntimeMeta) []LazyDispatchEntry {
+	if len(candidates) == 0 {
+		return nil
+	}
+	// Build index from entry VAddr → entry for fast lookup
+	entryByVA := make(map[uint64]Entry, len(entries))
+	for _, e := range entries {
+		entryByVA[e.VAddr] = e
+	}
+	out := make([]LazyDispatchEntry, 0, len(candidates))
+	for _, c := range candidates {
+		e, ok := entryByVA[c.StringVAddr]
+		if !ok {
+			continue
+		}
+		// Compute initial decryption state: same as cryptRuntimeString init
+		key := e.Key
+		if key == 0 {
+			key = 0x6d2b79f5
+		}
+		posParam := meta.ParamStringPos
+		if posParam == 0 {
+			posParam = 0x9d
+		}
+		idxParam := meta.ParamStringIndex
+		if idxParam == 0 {
+			idxParam = 0x7b
+		}
+		state := key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ (uint32(e.RuntimeIndex) * idxParam) ^ posParam ^ e.SaltA ^ e.SaltB ^ uint32(e.Variant&0x0f)
+		out = append(out, LazyDispatchEntry{
+			TextVA:     c.TextVAddr,
+			StringVA:   e.VAddr,
+			Length:     uint32(e.Length),
+			KeyState:   state,
+			PosParam:   posParam,
+			IdxParam:   idxParam,
+			SaltA:      e.SaltA,
+			SaltB:      e.SaltB,
+			Variant:    e.Variant & 0x0f,
+			OrigTarget: c.CallTarget,
+		})
+	}
+	return out
+}
+
+func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, payloadVA uint64) []byte {
+	if len(dispatchEntries) == 0 {
+		return data
+	}
+	ehdr := readEhdr64(data)
+	var payloadPh *elf64Phdr
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type == ptLoad && ph.Flags == pfR|pfW|pfX {
+			payloadPh = &ph
+			break
+		}
+	}
+	if payloadPh == nil {
+		return data
+	}
+
+	payload := data[payloadPh.Off : payloadPh.Off+payloadPh.Filesz]
+	tableStart := alignUp(uint64(len(payload)), 8)
+	tableLen := uint64(stubLazyEntSize * len(dispatchEntries))
+	newPayloadLen := int(tableStart + tableLen)
+
+	if int(stubLazyCountOff)+4 > len(payload) || int(stubLazyTableOff)+8 > len(payload) {
+		return data
+	}
+	binary.LittleEndian.PutUint32(payload[stubLazyCountOff:], uint32(len(dispatchEntries)))
+	binary.LittleEndian.PutUint64(payload[stubLazyTableOff:], payloadVA+tableStart)
+	for len(payload) < newPayloadLen {
+		payload = append(payload, 0)
+	}
+	for i, de := range dispatchEntries {
+		off := int(tableStart) + i*stubLazyEntSize
+		binary.LittleEndian.PutUint64(payload[off:], de.TextVA)
+		binary.LittleEndian.PutUint64(payload[off+8:], de.StringVA)
+		binary.LittleEndian.PutUint32(payload[off+16:], de.Length)
+		binary.LittleEndian.PutUint32(payload[off+20:], de.KeyState)
+		binary.LittleEndian.PutUint32(payload[off+24:], de.PosParam)
+		binary.LittleEndian.PutUint32(payload[off+28:], de.IdxParam)
+		binary.LittleEndian.PutUint32(payload[off+32:], de.SaltA)
+		binary.LittleEndian.PutUint32(payload[off+36:], de.SaltB)
+		payload[off+40] = de.Variant
+		binary.LittleEndian.PutUint64(payload[off+41:], 0) // zero pad[41..48]
+		binary.LittleEndian.PutUint64(payload[off+48:], de.OrigTarget)
+	}
+
+	// Rebuild the data array if payload grew
+	if uint64(len(payload)) > payloadPh.Filesz {
+		newData := make([]byte, 0, payloadPh.Off+uint64(newPayloadLen))
+		newData = append(newData, data[:payloadPh.Off]...)
+		newData = append(newData, payload...)
+		// Update phdr
+		phOff := ehdr.Phoff
+		for i := 0; i < int(ehdr.Phnum); i++ {
+			ph := readPhdr64(newData, phOff+uint64(i)*uint64(ehdr.Phentsize))
+			if ph.Type == ptLoad && ph.Flags == pfR|pfW|pfX {
+				writePhdr64(newData, phOff+uint64(i)*uint64(ehdr.Phentsize), elf64Phdr{
+					Type: ptLoad, Flags: pfR | pfW | pfX,
+					Off: ph.Off, Vaddr: ph.Vaddr, Paddr: ph.Paddr,
+					Filesz: uint64(len(payload)), Memsz: uint64(len(payload)),
+					Align: ph.Align,
+				})
+				break
+			}
+		}
+		return newData
+	}
+	// Payload didn't grow, write back
+	copy(data[payloadPh.Off:payloadPh.Off+uint64(len(payload))], payload)
+	return data
+}
+
+// findPayloadSegmentVA scans the ELF program headers and returns the virtual
+// address of the first RWX LOAD segment (the injected runtime payload).  Returns
+// 0 when no such segment is found.
+func findPayloadSegmentVA(data []byte) uint64 {
+	ehdr := readEhdr64(data)
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type == ptLoad && ph.Flags == pfR|pfW|pfX {
+			return ph.Vaddr
+		}
+	}
+	return 0
+}
+
+func disableAntiFridaExtra(payload []byte) {
+	// Compatibility test mode: skip only the newly added Frida/Gum/Gadget maps
+	// and fd-link probes. Keep the older anti-debug/status probe and all runtime
+	// decrypt/self-check logic intact so this build can isolate false positives
+	// from the extra probes without becoming a fully unprotected control.
+	patchAArch64B(payload, 0xc8, 0x270)
+	patchAArch64B(payload, 0x3c8, 0x584)
+}
+
+func patchAArch64B(payload []byte, fromOff, toOff uint32) {
+	if int(fromOff)+4 > len(payload) {
+		return
+	}
+	delta := int64(toOff) - int64(fromOff)
+	if delta%4 != 0 {
+		return
+	}
+	imm26 := delta / 4
+	if imm26 < -(1<<25) || imm26 >= (1<<25) {
+		return
+	}
+	insn := uint32(0x14000000) | (uint32(imm26) & 0x03ffffff)
+	binary.LittleEndian.PutUint32(payload[fromOff:], insn)
+}
+
+func randomizeStubPlaceholders(payload []byte) error {
+	for _, span := range []struct {
+		off int
+		n   int
+	}{
+		{stubAnchorOff, 8},
+		{stubStaticVAOff, 8},
+		{stubOrigEntryOff, 8},
+		{stubPageVAOff, 8},
+		{stubPageLenOff, 8},
+		{stubPayloadLenOff, 8},
+		{stubEntryCountOff, 8},
+		{stubTableSeedOff, 4},
+		{stubKeySeedOff, 4},
+		{stubParamTableAOff, 4},
+		{stubParamTableBOff, 4},
+		{stubParamKeyIndexOff, 4},
+		{stubParamStringPosOff, 4},
+		{stubParamStringIndexOff, 4},
+		{stubOrigEntryKeyOff, 8},
+	} {
+		if span.off+span.n > len(payload) {
+			return fmt.Errorf("runtime stub placeholder outside payload")
+		}
+		raw, err := randomBytes(span.n)
+		if err != nil {
+			return err
+		}
+		copy(payload[span.off:span.off+span.n], raw)
+	}
+	return nil
+}
+
+func buildRuntimeStringTable(entries []Entry, keySeed, keyIndexParam uint32) []byte {
+	out := make([]byte, len(entries)*stubTableEntSize)
+	for i, e := range entries {
+		off := i * stubTableEntSize
+		length := uint32(e.Length)
+		packedLen := packRuntimeLength(length, e.Variant)
+		binary.LittleEndian.PutUint64(out[off:], e.VAddr)
+		binary.LittleEndian.PutUint32(out[off+8:], packedLen)
+		binary.LittleEndian.PutUint32(out[off+12:], splitRuntimeKey(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, e.SaltB, e.Variant))
+		binary.LittleEndian.PutUint32(out[off+16:], e.SaltA)
+		binary.LittleEndian.PutUint32(out[off+20:], e.SaltB)
+	}
+	return out
+}
+
+func cryptRuntimeTable(table []byte, tableSeed, tableA, tableB uint32) {
+	for pos := range table {
+		mask := tableSeed ^ (uint32(pos) * tableA) ^ (uint32(pos>>3) * tableB) ^ 0x9e3779b9
+		mask = mixXorShift32(mask)
+		mask += uint32(pos >> 8)
+		table[pos] ^= byte(mask)
+	}
+}
+
+func splitRuntimeKey(key uint32, va uint64, length, index, keySeed, keyIndexParam, saltA, saltB uint32, variant uint8) uint32 {
+	return key ^ runtimeKeySplitMask(va, length, index, keySeed, keyIndexParam, saltA, saltB, variant)
+}
+
+func runtimeKeySplitMask(va uint64, length, index, keySeed, keyIndexParam, saltA, saltB uint32, variant uint8) uint32 {
+	mask := keySeed ^ uint32(va) ^ uint32(va>>32) ^ length ^ (index * keyIndexParam) ^ saltA ^ saltB ^ uint32(variant&0x0f) ^ 0x85ebca6b
+	mask = mixXorShift32(mask)
+	mask ^= uint32(va >> 7)
+	mask += length * 0x045d9f3b
+	return mask
+}
+
+func packRuntimeLength(length uint32, variant uint8) uint32 {
+	return (length & 0xffff) | (uint32(variant&0x0f) << 24)
+}
+
+func encodeTableSeed(seed uint32) uint32 {
+	return seed ^ 0xa5c35a7e
+}
+
+func encodeKeySeed(seed uint32) uint32 {
+	return seed ^ 0x6d9e3b17
+}
+
+const runtimeKeyIndexParam = uint32(0x31)
+
+func fillRuntimeParams(meta *RuntimeMeta) error {
+	var err error
+	if meta.ParamTableA == 0 {
+		meta.ParamTableA, err = randomOddUint32(0x5d)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.ParamTableB == 0 {
+		meta.ParamTableB, err = randomOddUint32(0x11)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.ParamKeyIndex == 0 {
+		meta.ParamKeyIndex, err = randomOddUint32(0x31)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.ParamStringPos == 0 {
+		meta.ParamStringPos, err = randomOddUint32(0x9d)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.ParamStringIndex == 0 {
+		meta.ParamStringIndex, err = randomOddUint32(0x7b)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.OrigEntryKey == 0 {
+		lo, err := randomUint32()
+		if err != nil {
+			return err
+		}
+		hi, err := randomUint32()
+		if err != nil {
+			return err
+		}
+		meta.OrigEntryKey = uint64(hi)<<32 | uint64(lo)
+	}
+	if meta.GuardSeed == 0 {
+		meta.GuardSeed, err = randomUint32()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func randomOddUint32(fallback uint32) (uint32, error) {
+	v, err := randomUint32()
+	if err != nil {
+		return 0, err
+	}
+	v |= 1
+	if v == 0 {
+		v = fallback | 1
+	}
+	return v, nil
+}
+
+func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
+	if len(entries) == 0 {
+		return entries, 0, nil
+	}
+	decoyCount := len(entries)/3 + 64
+	if decoyCount > 1024 {
+		decoyCount = 1024
+	}
+	out := make([]Entry, 0, len(entries)+decoyCount)
+	decoyLeft := decoyCount
+	for i := 0; i < len(entries); i++ {
+		if decoyLeft > 0 {
+			n, err := randomIndex(4)
+			if err != nil {
+				return nil, 0, err
+			}
+			for ; n > 0 && decoyLeft > 0; n-- {
+				d, err := makeDecoyEntry(entries[(i+decoyLeft)%len(entries)].VAddr)
+				if err != nil {
+					return nil, 0, err
+				}
+				out = append(out, d)
+				decoyLeft--
+			}
+		}
+		out = append(out, entries[i])
+	}
+	for decoyLeft > 0 {
+		d, err := makeDecoyEntry(entries[decoyLeft%len(entries)].VAddr)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, d)
+		decoyLeft--
+	}
+	for i := range out {
+		out[i].RuntimeIndex = i
+	}
+	return out, decoyCount, nil
+}
+
+func realRuntimeEntries(entries []Entry) []Entry {
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.Length == 0 || e.Section == "<decoy>" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func nonLazyRuntimeEntries(entries []Entry, lazyStringVAs map[uint64]struct{}) []Entry {
+	if len(lazyStringVAs) == 0 {
+		return entries
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if _, ok := lazyStringVAs[e.VAddr]; ok {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func lazyRuntimeEntryHashes(entries []Entry, lazyStringVAs map[uint64]struct{}) []string {
+	if len(lazyStringVAs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lazyStringVAs))
+	for _, e := range entries {
+		if _, ok := lazyStringVAs[e.VAddr]; ok {
+			out = append(out, e.SHA256)
+		}
+	}
+	return out
+}
+
+func makeDecoyEntry(baseVA uint64) (Entry, error) {
+	key, err := randomUint32()
+	if err != nil {
+		return Entry{}, err
+	}
+	noise, err := randomUint32()
+	if err != nil {
+		return Entry{}, err
+	}
+	saltA, err := randomUint32()
+	if err != nil {
+		return Entry{}, err
+	}
+	saltB, err := randomUint32()
+	if err != nil {
+		return Entry{}, err
+	}
+	variant, err := randomIndex(4)
+	if err != nil {
+		return Entry{}, err
+	}
+	return Entry{
+		Section: "<decoy>",
+		VAddr:   (baseVA &^ 0xfff) + uint64(noise&0xfff),
+		Length:  0,
+		Phase:   "decoy",
+		Key:     key,
+		SaltA:   saltA,
+		SaltB:   saltB,
+		Variant: uint8(variant),
+	}, nil
+}
+
+func buildRuntimeMeta(meta RuntimeMeta) []byte {
+	out := make([]byte, 0, 8+16+32+4+len(meta.RandomPad))
+	out = append(out, 0x91, 0xb7, 0x2d, 0x6c, 0x03, 0xda, 0x5e, 0xc4)
+	out = append(out, decodeHexFixed(meta.BuildID, 16)...)
+	out = append(out, decodeHexFixed(meta.WatermarkHash, 32)...)
+	padLen := len(meta.RandomPad)
+	if padLen > 255 {
+		padLen = 255
+	}
+	out = append(out, byte(padLen), 0, 0, 0)
+	out = append(out, meta.RandomPad[:padLen]...)
+
+	state := meta.TableSeed ^ meta.KeySeed ^ uint32(len(out))*0x045d9f3b
+	for i := range out {
+		state += uint32(i)*0x9e3779b9 + 0x7f4a7c15
+		state = mixXorShift32(state)
+		out[i] ^= byte(state >> uint((i&3)*8))
+	}
+	// Second pass with reversed index and different constants: two-pass XOR
+	// makes the meta blob statistically independent of any single-byte guess.
+	n := uint32(len(out))
+	for i := 0; i < len(out); i++ {
+		ri := n - 1 - uint32(i)
+		state = state ^ (ri * 0x3c6ef372) + meta.ParamTableA
+		state ^= state << 11
+		state ^= state >> 9
+		state ^= meta.ParamTableB
+		out[i] ^= byte(state>>uint((i&3)*8)) ^ byte(state>>16)
+	}
+	return out
+}
+
+func decodeHexFixed(s string, n int) []byte {
+	out := make([]byte, n)
+	if s == "" {
+		return out
+	}
+	raw, err := hex.DecodeString(s)
+	if err != nil {
+		copy(out, []byte(s))
+		return out
+	}
+	copy(out, raw)
+	return out
+}
+
+func cryptRuntimeString(buf []byte, va uint64, index uint32, key, posParam, indexParam, saltA, saltB uint32, variant uint8) {
+	if key == 0 {
+		key = 0x6d2b79f5
+	}
+	if posParam == 0 {
+		posParam = 0x9d
+	}
+	if indexParam == 0 {
+		indexParam = 0x7b
+	}
+	state := key ^ uint32(va) ^ uint32(va>>32) ^ uint32(len(buf)) ^ (index * indexParam) ^ posParam ^ saltA ^ saltB ^ uint32(variant&0x0f)
+	for pos := range buf {
+		state += posParam
+		state += saltB
+		state ^= uint32(pos)*indexParam + saltA
+		state = mixXorShift32(state)
+		mask := state + uint32(pos)*posParam + uint32(va>>4)
+		if variant&0x01 != 0 {
+			mask ^= state >> 8
+		}
+		if variant&0x02 != 0 {
+			mask ^= saltB
+		}
+		if variant&0x04 != 0 {
+			mask ^= state << 7
+		}
+		if variant&0x08 != 0 {
+			mask ^= state >> 11
+		}
+		buf[pos] ^= byte(mask)
+	}
+}
+
+func computeRuntimeGuardHash(code []byte, seed uint32) uint32 {
+	h := seed
+	for _, b := range code {
+		h += uint32(b)
+		h = mixXorShift32(h)
+	}
+	return h
+}
+
+func mixXorShift32(v uint32) uint32 {
+	v ^= v << 13
+	v ^= v >> 17
+	v ^= v << 5
+	return v
+}
+
+func stringPageWindow(entries []Entry) (uint64, uint64) {
+	if len(entries) == 0 {
+		return 0, 0
+	}
+	start := entries[0].VAddr &^ 0xfff
+	end := alignUp(entries[0].VAddr+uint64(entries[0].Length), 0x1000)
+	for _, e := range entries[1:] {
+		s := e.VAddr &^ 0xfff
+		n := alignUp(e.VAddr+uint64(e.Length), 0x1000)
+		if s < start {
+			start = s
+		}
+		if n > end {
+			end = n
+		}
+	}
+	return start, end - start
+}
+
+func maxLoadAlign(data []byte, ehdr elf64Ehdr) uint64 {
+	align := uint64(0x1000)
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type == ptLoad && ph.Align > align && ph.Align&(ph.Align-1) == 0 {
+			align = ph.Align
+		}
+	}
+	return align
+}
+
+func choosePayloadVA(data []byte, ehdr elf64Ehdr, loadAlign, payloadOff uint64) uint64 {
+	var maxEnd uint64
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+		if ph.Type != ptLoad {
+			continue
+		}
+		end := ph.Vaddr + ph.Memsz
+		if ph.Memsz > ph.Filesz {
+			end = alignUp(end, loadAlign)
+		}
+		if end > maxEnd {
+			maxEnd = end
+		}
+	}
+	payloadVA := alignUp(maxEnd, 0x10000)
+	if payloadVA%loadAlign != payloadOff%loadAlign {
+		payloadVA = alignUp(payloadVA, loadAlign) + (payloadOff % loadAlign)
+	}
+	return payloadVA
+}
+
+func findReusablePhdr(data []byte, ehdr elf64Ehdr) int {
+	for want := 0; want < 2; want++ {
+		target := ptGNUStack
+		if want == 1 {
+			target = ptNote
+		}
+		for i := 0; i < int(ehdr.Phnum); i++ {
+			ph := readPhdr64(data, ehdr.Phoff+uint64(i)*uint64(ehdr.Phentsize))
+			if ph.Type == target {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func sortLoadPhdrs(data []byte, ehdr elf64Ehdr) {
+	type slot struct {
+		idx int
+		ph  elf64Phdr
+	}
+	var loads []slot
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		off := ehdr.Phoff + uint64(i)*uint64(ehdr.Phentsize)
+		ph := readPhdr64(data, off)
+		if ph.Type == ptLoad {
+			loads = append(loads, slot{idx: i, ph: ph})
+		}
+	}
+	if len(loads) < 2 {
+		return
+	}
+	sort.Slice(loads, func(i, j int) bool {
+		if loads[i].ph.Vaddr == loads[j].ph.Vaddr {
+			return loads[i].idx < loads[j].idx
+		}
+		return loads[i].ph.Vaddr < loads[j].ph.Vaddr
+	})
+	var indices []int
+	for _, load := range loads {
+		indices = append(indices, load.idx)
+	}
+	sort.Ints(indices)
+	for i, idx := range indices {
+		writePhdr64(data, ehdr.Phoff+uint64(idx)*uint64(ehdr.Phentsize), loads[i].ph)
+	}
+}
