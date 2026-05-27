@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -78,5 +79,47 @@ func TestApplyEncryptFlagOverridesOnlyVisitsExplicitFlags(t *testing.T) {
 	}
 	if !opts.KeepSections {
 		t.Fatalf("keep-sections should not be overridden by an implicit default")
+	}
+}
+
+func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "out.manifest.json")
+	m := &elfstr.Manifest{
+		Schema:     elfstr.Schema,
+		InputPath:  "input.elf",
+		OutputPath: "missing.vmp",
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			ControlFlow:  "test-cfg",
+			CallsiteMode: "aarch64-lazy-decrypt-patch",
+		},
+	}
+	audit := buildManifestAudit(manifestPath, m)
+	if audit.Preset != elfstr.PresetAggressive || audit.ControlFlow != "test-cfg" {
+		t.Fatalf("audit metadata = %+v", audit)
+	}
+	checks := map[string]auditCheck{}
+	for _, check := range audit.Checks {
+		checks[check.Name] = check
+	}
+	if checks["output_sha256"].Status != "unavailable" {
+		t.Fatalf("output_sha256 check = %+v", checks["output_sha256"])
+	}
+	if checks["runtime_dispatch"].Status != "skipped" {
+		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
+	}
+	raw, err := json.Marshal(audit)
+	if err != nil {
+		t.Fatalf("marshal audit: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal audit: %v", err)
+	}
+	if _, ok := decoded["checks"]; !ok {
+		t.Fatalf("audit json missing checks: %s", raw)
 	}
 }

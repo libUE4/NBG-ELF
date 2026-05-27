@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -164,87 +165,104 @@ func printProtectionReport(report *elfstr.ProtectionReport) {
 	}
 }
 
-func runManifest(args []string) {
-	fs := flag.NewFlagSet("manifest", flag.ExitOnError)
-	strict := fs.Bool("strict", false, "当 output_sha256 不匹配或输出文件缺失时返回非零退出码")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] <manifest.json>")
-		os.Exit(2)
+type manifestAudit struct {
+	Schema         string       `json:"schema"`
+	InputPath      string       `json:"input_path"`
+	InputResolved  string       `json:"input_resolved,omitempty"`
+	OutputPath     string       `json:"output_path"`
+	OutputResolved string       `json:"output_resolved,omitempty"`
+	EntryCount     int          `json:"entry_count"`
+	EncryptedSize  int          `json:"encrypted_size"`
+	Preset         string       `json:"preset,omitempty"`
+	ControlFlow    string       `json:"control_flow,omitempty"`
+	CallsiteMode   string       `json:"callsite_mode,omitempty"`
+	Checks         []auditCheck `json:"checks"`
+}
+
+type auditCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
+	inputPath := resolveManifestInputPath(manifestPath, m.InputPath)
+	outputPath := resolveManifestOutputPath(manifestPath, m.OutputPath)
+	audit := manifestAudit{
+		Schema:        m.Schema,
+		InputPath:     m.InputPath,
+		OutputPath:    m.OutputPath,
+		EntryCount:    m.EntryCount,
+		EncryptedSize: m.EncryptedSize,
+		Preset:        m.Report.Preset,
+		ControlFlow:   m.Protection.ControlFlow,
+		CallsiteMode:  m.Protection.CallsiteMode,
 	}
-	m, err := elfstr.ReadManifest(fs.Arg(0))
-	if err != nil {
-		fatal(err)
-	}
-	fmt.Printf("清单版本: %s\n", m.Schema)
-	fmt.Printf("输入文件: %s\n", m.InputPath)
-	fmt.Printf("输出文件: %s\n", m.OutputPath)
-	inputPath := resolveManifestInputPath(fs.Arg(0), m.InputPath)
 	if inputPath != m.InputPath {
-		fmt.Printf("输入文件_解析后: %s\n", inputPath)
+		audit.InputResolved = inputPath
 	}
-	outputPath := resolveManifestOutputPath(fs.Arg(0), m.OutputPath)
 	if outputPath != m.OutputPath {
-		fmt.Printf("输出文件_解析后: %s\n", outputPath)
+		audit.OutputResolved = outputPath
 	}
-	outputAvailable := false
-	if raw, err := os.ReadFile(outputPath); err == nil {
-		outputAvailable = true
-		sum := sha256.Sum256(raw)
-		got := hex.EncodeToString(sum[:])
-		status := "ok"
-		if m.OutputSHA256 != "" && got != m.OutputSHA256 {
-			status = "mismatch"
-		}
-		fmt.Printf("输出_sha256: %s (%s)\n", got, status)
-		if *strict && status != "ok" {
-			fatalText("manifest 中的 output_sha256 不匹配")
-		}
-		if err := elfstr.ValidateEncryptedOutputBytes(raw, m.Options.KeepSections); err != nil {
-			fmt.Printf("输出结构: 无效 (%v)\n", err)
-			if *strict {
-				fatalText("manifest 输出结构校验失败")
-			}
-		} else {
-			fmt.Println("输出结构: ok")
-		}
-	} else {
-		fmt.Printf("输出_sha256: 不可用 (%v)\n", err)
-		if *strict {
-			fatalText("manifest 输出文件不可用")
-		}
-	}
-	if outputAvailable {
-		if err := elfstr.ValidateManifestPlaintextSlots(m, inputPath, outputPath); err != nil {
-			if isMissingPathError(err) {
-				fmt.Printf("明文槽位: 不可用 (%v)\n", err)
-			} else {
-				fmt.Printf("明文槽位: 无效 (%v)\n", err)
-				if *strict {
-					fatalText("manifest 明文槽位审计失败")
-				}
-			}
-		} else {
-			fmt.Println("明文槽位: ok")
-		}
-		if err := elfstr.ValidateManifestRuntimeTable(m, outputPath); err != nil {
-			fmt.Printf("运行时表: 无效 (%v)\n", err)
-			if *strict {
-				fatalText("manifest 运行时表审计失败")
-			}
-		} else {
-			fmt.Println("运行时表: ok")
-		}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "unavailable", Detail: err.Error()})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "skipped", Detail: "output unavailable"})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: "skipped", Detail: "output unavailable"})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "skipped", Detail: "output unavailable"})
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
-			if err := elfstr.ValidateManifestRuntimeDispatch(m, outputPath); err != nil {
-				fmt.Printf("运行时分派: 无效 (%v)\n", err)
-				if *strict {
-					fatalText("manifest 运行时分派审计失败")
-				}
-			} else {
-				fmt.Println("运行时分派: ok")
-			}
+			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "skipped", Detail: "output unavailable"})
 		}
+		return audit
+	}
+	sum := sha256.Sum256(raw)
+	got := hex.EncodeToString(sum[:])
+	if m.OutputSHA256 != "" && got != m.OutputSHA256 {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "mismatch", Detail: got})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "ok", Detail: got})
+	}
+	if err := elfstr.ValidateEncryptedOutputBytes(raw, m.Options.KeepSections); err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "invalid", Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "ok"})
+	}
+	if err := elfstr.ValidateManifestPlaintextSlots(m, inputPath, outputPath); err != nil {
+		status := "invalid"
+		if isMissingPathError(err) {
+			status = "unavailable"
+		}
+		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: status, Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: "ok"})
+	}
+	if err := elfstr.ValidateManifestRuntimeTable(m, outputPath); err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "invalid", Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "ok"})
+	}
+	if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
+		if err := elfstr.ValidateManifestRuntimeDispatch(m, outputPath); err != nil {
+			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "invalid", Detail: err.Error()})
+		} else {
+			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "ok"})
+		}
+	}
+	return audit
+}
+
+func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
+	fmt.Printf("清单版本: %s\n", audit.Schema)
+	fmt.Printf("输入文件: %s\n", audit.InputPath)
+	fmt.Printf("输出文件: %s\n", audit.OutputPath)
+	if audit.InputResolved != "" {
+		fmt.Printf("输入文件_解析后: %s\n", audit.InputResolved)
+	}
+	if audit.OutputResolved != "" {
+		fmt.Printf("输出文件_解析后: %s\n", audit.OutputResolved)
+	}
+	for _, check := range audit.Checks {
+		printAuditCheck(check)
 	}
 	fmt.Printf("条目: %d (%d 字节)\n", m.EntryCount, m.EncryptedSize)
 	if m.Report.Preset != "" {
@@ -262,6 +280,79 @@ func runManifest(args []string) {
 	fmt.Printf("调用点: 候选=%d 选中=%d 模式=%s\n", m.Protection.CallsiteLazyCandidates, m.Protection.CallsiteLazySelected, m.Protection.CallsiteMode)
 	if m.RuntimeStub.SHA256 != "" {
 		fmt.Printf("运行时_stub: 大小=%d sha256=%s entry_off=0x%x lazy_entry_off=0x%x honeypot_off=0x%x\n", m.RuntimeStub.Size, m.RuntimeStub.SHA256, m.RuntimeStub.EntryOff, m.RuntimeStub.LazyEntryOff, m.RuntimeStub.HoneypotOff)
+	}
+}
+
+func printAuditCheck(check auditCheck) {
+	labels := map[string]string{
+		"output_sha256":    "输出_sha256",
+		"output_structure": "输出结构",
+		"plaintext_slots":  "明文槽位",
+		"runtime_table":    "运行时表",
+		"runtime_dispatch": "运行时分派",
+	}
+	label := labels[check.Name]
+	if label == "" {
+		label = check.Name
+	}
+	switch check.Status {
+	case "ok":
+		if check.Name == "output_sha256" && check.Detail != "" {
+			fmt.Printf("%s: %s (ok)\n", label, check.Detail)
+		} else {
+			fmt.Printf("%s: ok\n", label)
+		}
+	case "mismatch":
+		fmt.Printf("%s: %s (mismatch)\n", label, check.Detail)
+	case "unavailable":
+		fmt.Printf("%s: 不可用 (%s)\n", label, check.Detail)
+	case "skipped":
+		fmt.Printf("%s: 跳过 (%s)\n", label, check.Detail)
+	default:
+		fmt.Printf("%s: 无效 (%s)\n", label, check.Detail)
+	}
+}
+
+func enforceManifestAudit(audit manifestAudit) {
+	for _, check := range audit.Checks {
+		switch check.Name {
+		case "output_sha256":
+			if check.Status != "ok" {
+				fatalText("manifest 中的 output_sha256 不匹配或不可用")
+			}
+		default:
+			if check.Status != "ok" && check.Status != "skipped" {
+				fatalText("manifest 审计失败: " + check.Name)
+			}
+		}
+	}
+}
+
+func runManifest(args []string) {
+	fs := flag.NewFlagSet("manifest", flag.ExitOnError)
+	strict := fs.Bool("strict", false, "当 output_sha256 不匹配或输出文件缺失时返回非零退出码")
+	jsonOutput := fs.Bool("json", false, "以 JSON 输出 manifest 审计结果")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] [-json] <manifest.json>")
+		os.Exit(2)
+	}
+	m, err := elfstr.ReadManifest(fs.Arg(0))
+	if err != nil {
+		fatal(err)
+	}
+	audit := buildManifestAudit(fs.Arg(0), m)
+	if *jsonOutput {
+		raw, err := json.MarshalIndent(audit, "", "  ")
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Println(string(raw))
+	} else {
+		printManifestAudit(audit, m)
+	}
+	if *strict {
+		enforceManifestAudit(audit)
 	}
 }
 
