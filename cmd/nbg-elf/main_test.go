@@ -137,6 +137,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
+		RuntimeStub: elfstr.RuntimeStubInfo{
+			SHA256: "unexpected",
+		},
 		Protection: elfstr.ProtectionProfile{
 			ControlFlow:  "test-cfg",
 			CallsiteMode: "aarch64-lazy-decrypt-patch",
@@ -155,6 +158,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	}
 	if checks["manifest_sha256"].Status != "unavailable" {
 		t.Fatalf("manifest_sha256 check = %+v", checks["manifest_sha256"])
+	}
+	if checks["runtime_stub"].Status != "invalid" {
+		t.Fatalf("runtime_stub check = %+v", checks["runtime_stub"])
 	}
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
@@ -220,6 +226,7 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 	audit := manifestAudit{
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},
@@ -281,6 +288,7 @@ func TestBuildAuditSummaryBlocksInvalidChecks(t *testing.T) {
 	audit := manifestAudit{
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "invalid"},
+			{Name: "runtime_stub", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 		},
 	}
@@ -301,6 +309,7 @@ func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *test
 	audit := manifestAudit{
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},

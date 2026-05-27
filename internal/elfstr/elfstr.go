@@ -341,16 +341,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			NoAntiFridaExtra:   opts.NoAntiFridaExtra,
 			ManifestDetail:     opts.ManifestDetail,
 		},
-		RuntimeStub: RuntimeStubInfo{
-			SHA256:        runtimeStubSHA256Hex(),
-			Size:          len(assets.StrdecBlob),
-			EntryOff:      stubEntryOff,
-			LazyEntryOff:  stubLazyEntryOff,
-			HoneypotOff:   stubHoneypotEntryOff,
-			LazyCountOff:  stubLazyCountOff,
-			LazyTableOff:  stubLazyTableOff,
-			LazyEntrySize: stubLazyEntSize,
-		},
+		RuntimeStub: runtimeStubInfo(),
 		Protection: ProtectionProfile{
 			Runtime:                "arm64-entrypoint-stub",
 			RandomizedLayout:       true,
@@ -532,6 +523,35 @@ func ManifestRequiresRuntimeDispatchAudit(m *Manifest) bool {
 	return m.Protection.CallsiteMode == callsiteModeAArch64LazyDecrypt
 }
 
+func ValidateManifestRuntimeStub(m *Manifest) error {
+	want := runtimeStubInfo()
+	if m.RuntimeStub.SHA256 != want.SHA256 {
+		return fmt.Errorf("runtime stub sha256 got %s want %s", m.RuntimeStub.SHA256, want.SHA256)
+	}
+	if m.RuntimeStub.Size != want.Size {
+		return fmt.Errorf("runtime stub size got %d want %d", m.RuntimeStub.Size, want.Size)
+	}
+	if m.RuntimeStub.EntryOff != want.EntryOff {
+		return fmt.Errorf("runtime stub entry_off got %#x want %#x", m.RuntimeStub.EntryOff, want.EntryOff)
+	}
+	if m.RuntimeStub.LazyEntryOff != want.LazyEntryOff {
+		return fmt.Errorf("runtime stub lazy_entry_off got %#x want %#x", m.RuntimeStub.LazyEntryOff, want.LazyEntryOff)
+	}
+	if m.RuntimeStub.HoneypotOff != want.HoneypotOff {
+		return fmt.Errorf("runtime stub honeypot_off got %#x want %#x", m.RuntimeStub.HoneypotOff, want.HoneypotOff)
+	}
+	if m.RuntimeStub.LazyCountOff != want.LazyCountOff {
+		return fmt.Errorf("runtime stub lazy_count_off got %#x want %#x", m.RuntimeStub.LazyCountOff, want.LazyCountOff)
+	}
+	if m.RuntimeStub.LazyTableOff != want.LazyTableOff {
+		return fmt.Errorf("runtime stub lazy_table_off got %#x want %#x", m.RuntimeStub.LazyTableOff, want.LazyTableOff)
+	}
+	if m.RuntimeStub.LazyEntrySize != want.LazyEntrySize {
+		return fmt.Errorf("runtime stub lazy_entry_size got %d want %d", m.RuntimeStub.LazyEntrySize, want.LazyEntrySize)
+	}
+	return nil
+}
+
 func ValidateManifestRuntimeTable(m *Manifest, outputPath string) error {
 	outputRaw, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -539,6 +559,19 @@ func ValidateManifestRuntimeTable(m *Manifest, outputPath string) error {
 	}
 	expectedEntries := m.EntryCount + m.Protection.DecoyCount
 	return validateInjectedOutputRuntimeTable(outputRaw, expectedEntries)
+}
+
+func runtimeStubInfo() RuntimeStubInfo {
+	return RuntimeStubInfo{
+		SHA256:        runtimeStubSHA256Hex(),
+		Size:          len(assets.StrdecBlob),
+		EntryOff:      stubEntryOff,
+		LazyEntryOff:  stubLazyEntryOff,
+		HoneypotOff:   stubHoneypotEntryOff,
+		LazyCountOff:  stubLazyCountOff,
+		LazyTableOff:  stubLazyTableOff,
+		LazyEntrySize: stubLazyEntSize,
+	}
 }
 
 func ReadManifest(path string) (*Manifest, error) {

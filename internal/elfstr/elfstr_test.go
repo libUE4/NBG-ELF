@@ -898,6 +898,17 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRuntimeStubCatchesMetadataMismatch(t *testing.T) {
+	m := &Manifest{RuntimeStub: runtimeStubInfo()}
+	if err := ValidateManifestRuntimeStub(m); err != nil {
+		t.Fatalf("validate runtime stub: %v", err)
+	}
+	m.RuntimeStub.LazyEntryOff++
+	if err := ValidateManifestRuntimeStub(m); err == nil {
+		t.Fatalf("expected runtime stub metadata mismatch")
+	}
+}
+
 func TestManifestSelfHashDetectsMetadataTamper(t *testing.T) {
 	m := &Manifest{
 		Schema:       Schema,

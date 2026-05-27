@@ -301,6 +301,11 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "manifest_sha256", Status: "ok", Detail: m.ManifestSHA256})
 	}
+	if err := elfstr.ValidateManifestRuntimeStub(m); err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_stub", Status: "invalid", Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_stub", Status: "ok", Detail: m.RuntimeStub.SHA256})
+	}
 	raw, err := os.ReadFile(outputPath)
 	if err != nil {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "unavailable", Detail: err.Error()})
@@ -502,6 +507,7 @@ func printAuditCheck(check auditCheck) {
 		"manifest_sha256":  "manifest_sha256",
 		"output_sha256":    "输出_sha256",
 		"output_structure": "输出结构",
+		"runtime_stub":     "运行时_stub",
 		"plaintext_slots":  "明文槽位",
 		"runtime_table":    "运行时表",
 		"runtime_dispatch": "运行时分派",
