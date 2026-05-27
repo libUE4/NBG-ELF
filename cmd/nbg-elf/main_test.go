@@ -257,6 +257,33 @@ func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *test
 	}
 }
 
+func TestEnforceMinimumAuditGrade(t *testing.T) {
+	audit := manifestAudit{Summary: auditSummary{Grade: "hardened"}}
+	if err := enforceMinimumAuditGrade(audit, "review-needed"); err != nil {
+		t.Fatalf("review-needed threshold should pass: %v", err)
+	}
+	if err := enforceMinimumAuditGrade(audit, "hardened"); err != nil {
+		t.Fatalf("hardened threshold should pass: %v", err)
+	}
+	if err := enforceMinimumAuditGrade(audit, "commercial-ready"); err == nil {
+		t.Fatalf("commercial-ready threshold should fail for hardened audit")
+	}
+	if err := enforceMinimumAuditGrade(audit, "unknown"); err == nil {
+		t.Fatalf("unknown threshold should fail")
+	}
+	if err := enforceMinimumAuditGrade(manifestAudit{Summary: auditSummary{Grade: "unknown"}}, "hardened"); err == nil {
+		t.Fatalf("unknown audit grade should fail")
+	}
+}
+
+func TestAuditGradeRankOrdering(t *testing.T) {
+	if !(auditGradeRank("blocked") < auditGradeRank("review-needed") &&
+		auditGradeRank("review-needed") < auditGradeRank("hardened") &&
+		auditGradeRank("hardened") < auditGradeRank("commercial-ready")) {
+		t.Fatalf("unexpected grade order")
+	}
+}
+
 func TestProtectionReportJSONFieldNames(t *testing.T) {
 	report := elfstr.ProtectionReport{
 		Preset:             elfstr.PresetBalanced,

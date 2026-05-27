@@ -472,13 +472,47 @@ func enforceManifestAudit(audit manifestAudit) {
 	}
 }
 
+func auditGradeRank(grade string) int {
+	switch grade {
+	case "blocked":
+		return 0
+	case "review-needed":
+		return 1
+	case "hardened":
+		return 2
+	case "commercial-ready":
+		return 3
+	default:
+		return -1
+	}
+}
+
+func enforceMinimumAuditGrade(audit manifestAudit, minGrade string) error {
+	if minGrade == "" {
+		return nil
+	}
+	want := auditGradeRank(minGrade)
+	if want < 0 {
+		return fmt.Errorf("unsupported audit grade %q", minGrade)
+	}
+	got := auditGradeRank(audit.Summary.Grade)
+	if got < 0 {
+		return fmt.Errorf("unknown audit grade %q", audit.Summary.Grade)
+	}
+	if got < want {
+		return fmt.Errorf("manifest audit grade %s is below required %s", audit.Summary.Grade, minGrade)
+	}
+	return nil
+}
+
 func runManifest(args []string) {
 	fs := flag.NewFlagSet("manifest", flag.ExitOnError)
 	strict := fs.Bool("strict", false, "当 output_sha256 不匹配或输出文件缺失时返回非零退出码")
 	jsonOutput := fs.Bool("json", false, "以 JSON 输出 manifest 审计结果")
+	minGrade := fs.String("min-grade", "", "要求最低审计等级: review-needed, hardened, commercial-ready")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] [-json] <manifest.json>")
+		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>")
 		os.Exit(2)
 	}
 	m, err := elfstr.ReadManifest(fs.Arg(0))
@@ -497,6 +531,9 @@ func runManifest(args []string) {
 	}
 	if *strict {
 		enforceManifestAudit(audit)
+	}
+	if err := enforceMinimumAuditGrade(audit, *minGrade); err != nil {
+		fatal(err)
 	}
 }
 
@@ -560,13 +597,13 @@ func usage() {
 命令:
   inspect [选项] <input.elf>
   encrypt [-preset safe|balanced|aggressive] [-config protection.json] [选项] <input.elf>
-  manifest [-strict] [-json] <manifest.json>
-  verify <manifest.json>
+  manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>
+  verify [-min-grade hardened|commercial-ready] <manifest.json>
 
 说明:
   encrypt -report -json 会以机器可读 JSON 输出保护计划。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
-  manifest 会打印保护元数据，并在输出文件可访问时校验 output_sha256。
+  manifest 会打印保护元数据、审计评分，并在输出文件可访问时校验 output_sha256。
   verify 等价于 manifest -strict。`)
 }
 
