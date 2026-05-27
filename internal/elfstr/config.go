@@ -188,15 +188,11 @@ func PlanProtectionBytes(raw []byte, opts Options) (*ProtectionReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	mode := callsiteModeAArch64ScanOnly
-	selected := 0
-	if opts.LazyCallsiteDryRun || (opts.LazyCallsiteLimit > 0 && !opts.LazyCallsite) {
-		mode = callsiteModeAArch64DryRun
-		selected = len(limitCallsiteCandidates(callsiteCandidates, opts.LazyCallsiteLimit))
-	} else if opts.LazyCallsite {
-		mode = callsiteModeAArch64LazyDecrypt
-		selected = len(limitCallsiteCandidates(callsiteCandidates, opts.LazyCallsiteLimit))
+	mode, selectedCandidates, err := selectCallsiteProtection(opts, callsiteCandidates)
+	if err != nil {
+		return nil, err
 	}
+	selected := len(selectedCandidates)
 	total := 0
 	for _, e := range manifestEntries {
 		total += e.Length

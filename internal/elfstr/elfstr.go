@@ -185,23 +185,11 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
-	callsiteMode := callsiteModeAArch64ScanOnly
-	callsiteSelected := 0
-	var selectedLazyCandidates []CallsiteCandidate
-	if opts.LazyCallsiteLimit < 0 {
-		return nil, fmt.Errorf("lazy callsite limit must be >= 0")
+	callsiteMode, selectedLazyCandidates, err := selectCallsiteProtection(opts, callsiteCandidates)
+	if err != nil {
+		return nil, err
 	}
-	if opts.LazyCallsiteDryRun || (opts.LazyCallsiteLimit > 0 && !opts.LazyCallsite) {
-		callsiteMode = callsiteModeAArch64DryRun
-		callsiteSelected = len(limitCallsiteCandidates(callsiteCandidates, opts.LazyCallsiteLimit))
-	} else if opts.LazyCallsite {
-		if opts.LazyCallsiteLimit <= 0 {
-			return nil, fmt.Errorf("lazy callsite patch requires -lazy-callsite-limit > 0")
-		}
-		callsiteMode = callsiteModeAArch64LazyDecrypt
-		selectedLazyCandidates = limitCallsiteCandidates(callsiteCandidates, opts.LazyCallsiteLimit)
-		callsiteSelected = len(selectedLazyCandidates)
-	}
+	callsiteSelected := len(selectedLazyCandidates)
 	out := bytes.Clone(raw)
 	var dispatchEntries []LazyDispatchEntry
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {

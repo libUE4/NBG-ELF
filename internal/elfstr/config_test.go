@@ -1,6 +1,7 @@
 package elfstr
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,4 +91,72 @@ func TestProtectionWarningsIncludeSkippedCallsites(t *testing.T) {
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "上限") {
 		t.Fatalf("warnings = %#v", warnings)
 	}
+}
+
+func TestPlanProtectionFallbackDoesNotReportLazyPatchWithoutCandidates(t *testing.T) {
+	raw := syntheticPlanELF([]byte("protected fixture string\x00"))
+	report, err := PlanProtectionBytes(raw, Options{LazyCallsite: true, LazyCallsiteLimit: 8})
+	if err != nil {
+		t.Fatalf("plan protection: %v", err)
+	}
+	if report.CallsiteMode != callsiteModeAArch64ScanOnly {
+		t.Fatalf("callsite mode got %q want %q", report.CallsiteMode, callsiteModeAArch64ScanOnly)
+	}
+	if report.CallsiteSelected != 0 {
+		t.Fatalf("selected got %d want 0", report.CallsiteSelected)
+	}
+	if len(report.Warnings) == 0 {
+		t.Fatalf("expected warning for lazy request without candidates")
+	}
+}
+
+func syntheticPlanELF(rodataContent []byte) []byte {
+	shstrtab := []byte("\x00.shstrtab\x00.rodata\x00")
+	ehdr := make([]byte, 64)
+	ehdr[0] = 0x7f
+	ehdr[1], ehdr[2], ehdr[3], ehdr[4], ehdr[5], ehdr[6] = 'E', 'L', 'F', 2, 1, 1
+	binary.LittleEndian.PutUint16(ehdr[0x10:], 3)
+	binary.LittleEndian.PutUint16(ehdr[0x12:], 183)
+	binary.LittleEndian.PutUint32(ehdr[0x14:], 1)
+	binary.LittleEndian.PutUint64(ehdr[0x20:], 0x40)
+	binary.LittleEndian.PutUint16(ehdr[0x36:], 56)
+	binary.LittleEndian.PutUint16(ehdr[0x38:], 1)
+	phdr := make([]byte, 56)
+	binary.LittleEndian.PutUint32(phdr[0:], ptLoad)
+	binary.LittleEndian.PutUint32(phdr[4:], pfR)
+	binary.LittleEndian.PutUint64(phdr[32:], 0x200)
+	binary.LittleEndian.PutUint64(phdr[40:], 0x200)
+	binary.LittleEndian.PutUint64(phdr[48:], 0x1000)
+	rodataOff := len(ehdr) + len(phdr)
+	shstrtabOff := alignInt(rodataOff+len(rodataContent), 8)
+	sectionsOff := shstrtabOff + len(shstrtab)
+	sections := make([]byte, 3*64)
+	binary.LittleEndian.PutUint32(sections[64:], 1)
+	binary.LittleEndian.PutUint32(sections[64+4:], 3)
+	binary.LittleEndian.PutUint64(sections[64+24:], uint64(shstrtabOff))
+	binary.LittleEndian.PutUint64(sections[64+32:], uint64(len(shstrtab)))
+	binary.LittleEndian.PutUint32(sections[128:], 11)
+	binary.LittleEndian.PutUint32(sections[128+4:], 1)
+	binary.LittleEndian.PutUint64(sections[128+8:], 2)
+	binary.LittleEndian.PutUint64(sections[128+16:], 0x1000)
+	binary.LittleEndian.PutUint64(sections[128+24:], uint64(rodataOff))
+	binary.LittleEndian.PutUint64(sections[128+32:], uint64(len(rodataContent)))
+	binary.LittleEndian.PutUint64(ehdr[0x28:], uint64(sectionsOff))
+	binary.LittleEndian.PutUint16(ehdr[0x3a:], 64)
+	binary.LittleEndian.PutUint16(ehdr[0x3c:], 3)
+	binary.LittleEndian.PutUint16(ehdr[0x3e:], 1)
+	raw := make([]byte, 0, sectionsOff+len(sections))
+	raw = append(raw, ehdr...)
+	raw = append(raw, phdr...)
+	raw = append(raw, rodataContent...)
+	for len(raw) < shstrtabOff {
+		raw = append(raw, 0)
+	}
+	raw = append(raw, shstrtab...)
+	raw = append(raw, sections...)
+	return raw
+}
+
+func alignInt(v, align int) int {
+	return (v + align - 1) &^ (align - 1)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"fmt"
 	"sort"
 )
 
@@ -144,6 +145,27 @@ func limitCallsiteCandidates(candidates []CallsiteCandidate, limit int) []Callsi
 		return candidates
 	}
 	return candidates[:limit]
+}
+
+func selectCallsiteProtection(opts Options, candidates []CallsiteCandidate) (string, []CallsiteCandidate, error) {
+	if opts.LazyCallsiteLimit < 0 {
+		return "", nil, fmt.Errorf("lazy callsite limit must be >= 0")
+	}
+	if opts.LazyCallsiteDryRun || (opts.LazyCallsiteLimit > 0 && !opts.LazyCallsite) {
+		selected := limitCallsiteCandidates(candidates, opts.LazyCallsiteLimit)
+		return callsiteModeAArch64DryRun, selected, nil
+	}
+	if !opts.LazyCallsite {
+		return callsiteModeAArch64ScanOnly, nil, nil
+	}
+	if opts.LazyCallsiteLimit <= 0 {
+		return "", nil, fmt.Errorf("lazy callsite patch requires -lazy-callsite-limit > 0")
+	}
+	selected := limitCallsiteCandidates(candidates, opts.LazyCallsiteLimit)
+	if len(selected) == 0 {
+		return callsiteModeAArch64ScanOnly, nil, nil
+	}
+	return callsiteModeAArch64LazyDecrypt, selected, nil
 }
 
 func patchCallsiteBL(data []byte, textOff uint64, textVA uint64, trampolineVA uint64) bool {

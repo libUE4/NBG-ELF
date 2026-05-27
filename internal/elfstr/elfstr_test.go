@@ -481,6 +481,32 @@ func TestLimitCallsiteCandidates(t *testing.T) {
 	}
 }
 
+func TestSelectCallsiteProtectionFallsBackWhenLazyPatchHasNoCandidates(t *testing.T) {
+	mode, selected, err := selectCallsiteProtection(Options{LazyCallsite: true, LazyCallsiteLimit: 8}, nil)
+	if err != nil {
+		t.Fatalf("select callsite protection: %v", err)
+	}
+	if mode != callsiteModeAArch64ScanOnly {
+		t.Fatalf("mode got %q want %q", mode, callsiteModeAArch64ScanOnly)
+	}
+	if len(selected) != 0 {
+		t.Fatalf("selected candidates = %+v", selected)
+	}
+}
+
+func TestSelectCallsiteProtectionKeepsDryRunWithoutCandidates(t *testing.T) {
+	mode, selected, err := selectCallsiteProtection(Options{LazyCallsiteDryRun: true, LazyCallsiteLimit: 8}, nil)
+	if err != nil {
+		t.Fatalf("select callsite protection: %v", err)
+	}
+	if mode != callsiteModeAArch64DryRun {
+		t.Fatalf("mode got %q want %q", mode, callsiteModeAArch64DryRun)
+	}
+	if len(selected) != 0 {
+		t.Fatalf("selected candidates = %+v", selected)
+	}
+}
+
 func TestIsForcedShortStringCandidate(t *testing.T) {
 	// Only 3-5 byte ASCII identifiers with >=3 alpha and >=2 uppercase
 	cases := []struct {
