@@ -875,6 +875,13 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 			LazyTableOff:  stubLazyTableOff,
 			LazyEntrySize: stubLazyEntSize,
 		},
+		RuntimePayload: RuntimePayloadInfo{
+			SHA256:       "def456",
+			Size:         4096,
+			DeclaredSize: 4096,
+			FileOffset:   0x5000,
+			VAddr:        0x7000,
+		},
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -889,6 +896,9 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["runtime_stub"]; !ok {
 		t.Fatalf("manifest json missing runtime_stub: %s", raw)
+	}
+	if _, ok := decoded["runtime_payload"]; !ok {
+		t.Fatalf("manifest json missing runtime_payload: %s", raw)
 	}
 	if _, ok := decoded["config"]; !ok {
 		t.Fatalf("manifest json missing config: %s", raw)
@@ -1022,8 +1032,25 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	if err := validateInjectedOutputRuntimeTable(out, expectedEntries); err != nil {
 		t.Fatalf("validate runtime table failed: %v", err)
 	}
+	payloadInfo, err := runtimePayloadInfoFromBytes(out)
+	if err != nil {
+		t.Fatalf("runtime payload info: %v", err)
+	}
+	m := &Manifest{RuntimePayload: payloadInfo}
+	if err := ValidateManifestRuntimePayloadBytes(m, out); err != nil {
+		t.Fatalf("validate runtime payload failed: %v", err)
+	}
+	corruptPayload := append([]byte(nil), out...)
+	_, payloadRaw, _, err := findRuntimePayload(corruptPayload)
+	if err != nil {
+		t.Fatalf("find runtime payload for corrupt copy: %v", err)
+	}
+	payloadRaw[stubEntryOff] ^= 0xff
+	if err := ValidateManifestRuntimePayloadBytes(m, corruptPayload); err == nil {
+		t.Fatalf("validate runtime payload accepted corrupt payload")
+	}
 	corruptTable := append([]byte(nil), out...)
-	_, payloadRaw, _, err := findRuntimePayload(corruptTable)
+	_, payloadRaw, _, err = findRuntimePayload(corruptTable)
 	if err != nil {
 		t.Fatalf("find runtime payload: %v", err)
 	}

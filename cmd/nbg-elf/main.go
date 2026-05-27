@@ -235,10 +235,11 @@ type manifestAudit struct {
 }
 
 type auditArtifact struct {
-	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
-	InputSHA256    string `json:"input_sha256,omitempty"`
-	OutputSHA256   string `json:"output_sha256,omitempty"`
-	RuntimeSHA256  string `json:"runtime_sha256,omitempty"`
+	ManifestSHA256       string `json:"manifest_sha256,omitempty"`
+	InputSHA256          string `json:"input_sha256,omitempty"`
+	OutputSHA256         string `json:"output_sha256,omitempty"`
+	RuntimeSHA256        string `json:"runtime_sha256,omitempty"`
+	RuntimePayloadSHA256 string `json:"runtime_payload_sha256,omitempty"`
 }
 
 type auditFeatures struct {
@@ -279,10 +280,11 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		ControlFlow:   m.Protection.ControlFlow,
 		CallsiteMode:  m.Protection.CallsiteMode,
 		Artifact: auditArtifact{
-			ManifestSHA256: m.ManifestSHA256,
-			InputSHA256:    m.InputSHA256,
-			OutputSHA256:   m.OutputSHA256,
-			RuntimeSHA256:  m.RuntimeStub.SHA256,
+			ManifestSHA256:       m.ManifestSHA256,
+			InputSHA256:          m.InputSHA256,
+			OutputSHA256:         m.OutputSHA256,
+			RuntimeSHA256:        m.RuntimeStub.SHA256,
+			RuntimePayloadSHA256: m.RuntimePayload.SHA256,
 		},
 		Capabilities: auditCapabilities(m),
 	}
@@ -311,6 +313,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_sha256", Status: "unavailable", Detail: err.Error()})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: "skipped", Detail: "output unavailable"})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "skipped", Detail: "output unavailable"})
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
 			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "skipped", Detail: "output unavailable"})
@@ -328,6 +331,11 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "invalid", Detail: err.Error()})
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "ok"})
+	}
+	if err := elfstr.ValidateManifestRuntimePayloadBytes(m, raw); err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "invalid", Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "ok", Detail: m.RuntimePayload.SHA256})
 	}
 	if err := elfstr.ValidateManifestPlaintextSlots(m, inputPath, outputPath); err != nil {
 		status := "invalid"
@@ -500,6 +508,9 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	if m.RuntimeStub.SHA256 != "" {
 		fmt.Printf("运行时_stub: 大小=%d sha256=%s entry_off=0x%x lazy_entry_off=0x%x honeypot_off=0x%x\n", m.RuntimeStub.Size, m.RuntimeStub.SHA256, m.RuntimeStub.EntryOff, m.RuntimeStub.LazyEntryOff, m.RuntimeStub.HoneypotOff)
 	}
+	if m.RuntimePayload.SHA256 != "" {
+		fmt.Printf("运行时_payload: 大小=%d declared=%d off=0x%x va=0x%x sha256=%s\n", m.RuntimePayload.Size, m.RuntimePayload.DeclaredSize, m.RuntimePayload.FileOffset, m.RuntimePayload.VAddr, m.RuntimePayload.SHA256)
+	}
 }
 
 func printAuditCheck(check auditCheck) {
@@ -508,6 +519,7 @@ func printAuditCheck(check auditCheck) {
 		"output_sha256":    "输出_sha256",
 		"output_structure": "输出结构",
 		"runtime_stub":     "运行时_stub",
+		"runtime_payload":  "运行时_payload",
 		"plaintext_slots":  "明文槽位",
 		"runtime_table":    "运行时表",
 		"runtime_dispatch": "运行时分派",

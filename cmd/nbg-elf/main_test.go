@@ -162,6 +162,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["runtime_stub"].Status != "invalid" {
 		t.Fatalf("runtime_stub check = %+v", checks["runtime_stub"])
 	}
+	if checks["runtime_payload"].Status != "skipped" {
+		t.Fatalf("runtime_payload check = %+v", checks["runtime_payload"])
+	}
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
 	}
@@ -227,6 +230,7 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},
@@ -289,6 +293,7 @@ func TestBuildAuditSummaryBlocksInvalidChecks(t *testing.T) {
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "invalid"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 		},
 	}
@@ -310,6 +315,7 @@ func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *test
 		Checks: []auditCheck{
 			{Name: "manifest_sha256", Status: "ok"},
 			{Name: "runtime_stub", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},

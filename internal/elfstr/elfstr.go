@@ -43,26 +43,27 @@ type Options struct {
 }
 
 type Manifest struct {
-	Schema         string            `json:"schema"`
-	Tool           string            `json:"tool"`
-	GeneratedUTC   string            `json:"generated_utc"`
-	BuildID        string            `json:"build_id"`
-	WatermarkHash  string            `json:"watermark_hash,omitempty"`
-	Protection     ProtectionProfile `json:"protection"`
-	Config         ProtectionConfig  `json:"config,omitempty"`
-	Report         ProtectionReport  `json:"report,omitempty"`
-	Options        ManifestOptions   `json:"options,omitempty"`
-	RuntimeStub    RuntimeStubInfo   `json:"runtime_stub,omitempty"`
-	InputPath      string            `json:"input_path"`
-	OutputPath     string            `json:"output_path"`
-	InputSHA256    string            `json:"input_sha256"`
-	OutputSHA256   string            `json:"output_sha256"`
-	ManifestSHA256 string            `json:"manifest_sha256,omitempty"`
-	MinLen         int               `json:"min_len"`
-	IncludeData    bool              `json:"include_data"`
-	EntryCount     int               `json:"entry_count"`
-	EncryptedSize  int               `json:"encrypted_size"`
-	Entries        []Entry           `json:"entries"`
+	Schema         string             `json:"schema"`
+	Tool           string             `json:"tool"`
+	GeneratedUTC   string             `json:"generated_utc"`
+	BuildID        string             `json:"build_id"`
+	WatermarkHash  string             `json:"watermark_hash,omitempty"`
+	Protection     ProtectionProfile  `json:"protection"`
+	Config         ProtectionConfig   `json:"config,omitempty"`
+	Report         ProtectionReport   `json:"report,omitempty"`
+	Options        ManifestOptions    `json:"options,omitempty"`
+	RuntimeStub    RuntimeStubInfo    `json:"runtime_stub,omitempty"`
+	RuntimePayload RuntimePayloadInfo `json:"runtime_payload,omitempty"`
+	InputPath      string             `json:"input_path"`
+	OutputPath     string             `json:"output_path"`
+	InputSHA256    string             `json:"input_sha256"`
+	OutputSHA256   string             `json:"output_sha256"`
+	ManifestSHA256 string             `json:"manifest_sha256,omitempty"`
+	MinLen         int                `json:"min_len"`
+	IncludeData    bool               `json:"include_data"`
+	EntryCount     int                `json:"entry_count"`
+	EncryptedSize  int                `json:"encrypted_size"`
+	Entries        []Entry            `json:"entries"`
 }
 
 type ManifestOptions struct {
@@ -87,6 +88,14 @@ type RuntimeStubInfo struct {
 	LazyCountOff  uint64 `json:"lazy_count_off,omitempty"`
 	LazyTableOff  uint64 `json:"lazy_table_off,omitempty"`
 	LazyEntrySize int    `json:"lazy_entry_size,omitempty"`
+}
+
+type RuntimePayloadInfo struct {
+	SHA256       string `json:"sha256"`
+	Size         uint64 `json:"size"`
+	DeclaredSize uint64 `json:"declared_size"`
+	FileOffset   uint64 `json:"file_offset,omitempty"`
+	VAddr        uint64 `json:"vaddr,omitempty"`
 }
 
 type ProtectionProfile struct {
@@ -271,6 +280,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	}
 	inSum := sha256.Sum256(raw)
 	outSum := sha256.Sum256(out)
+	runtimePayload, err := runtimePayloadInfoFromBytes(out)
+	if err != nil {
+		return nil, err
+	}
 	total := 0
 	for _, e := range manifestEntries {
 		total += e.Length
@@ -341,7 +354,8 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			NoAntiFridaExtra:   opts.NoAntiFridaExtra,
 			ManifestDetail:     opts.ManifestDetail,
 		},
-		RuntimeStub: runtimeStubInfo(),
+		RuntimeStub:    runtimeStubInfo(),
+		RuntimePayload: runtimePayload,
 		Protection: ProtectionProfile{
 			Runtime:                "arm64-entrypoint-stub",
 			RandomizedLayout:       true,
@@ -561,6 +575,40 @@ func ValidateManifestRuntimeTable(m *Manifest, outputPath string) error {
 	return validateInjectedOutputRuntimeTable(outputRaw, expectedEntries)
 }
 
+func ValidateManifestRuntimePayloadBytes(m *Manifest, outputRaw []byte) error {
+	got, err := runtimePayloadInfoFromBytes(outputRaw)
+	if err != nil {
+		return err
+	}
+	if m.RuntimePayload.SHA256 == "" {
+		return fmt.Errorf("runtime payload sha256 missing")
+	}
+	if got.SHA256 != m.RuntimePayload.SHA256 {
+		return fmt.Errorf("runtime payload sha256 got %s want %s", got.SHA256, m.RuntimePayload.SHA256)
+	}
+	if got.Size != m.RuntimePayload.Size {
+		return fmt.Errorf("runtime payload size got %d want %d", got.Size, m.RuntimePayload.Size)
+	}
+	if got.DeclaredSize != m.RuntimePayload.DeclaredSize {
+		return fmt.Errorf("runtime payload declared_size got %d want %d", got.DeclaredSize, m.RuntimePayload.DeclaredSize)
+	}
+	if got.FileOffset != m.RuntimePayload.FileOffset {
+		return fmt.Errorf("runtime payload file_offset got %#x want %#x", got.FileOffset, m.RuntimePayload.FileOffset)
+	}
+	if got.VAddr != m.RuntimePayload.VAddr {
+		return fmt.Errorf("runtime payload vaddr got %#x want %#x", got.VAddr, m.RuntimePayload.VAddr)
+	}
+	return nil
+}
+
+func ValidateManifestRuntimePayload(m *Manifest, outputPath string) error {
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	return ValidateManifestRuntimePayloadBytes(m, outputRaw)
+}
+
 func runtimeStubInfo() RuntimeStubInfo {
 	return RuntimeStubInfo{
 		SHA256:        runtimeStubSHA256Hex(),
@@ -572,6 +620,21 @@ func runtimeStubInfo() RuntimeStubInfo {
 		LazyTableOff:  stubLazyTableOff,
 		LazyEntrySize: stubLazyEntSize,
 	}
+}
+
+func runtimePayloadInfoFromBytes(outputRaw []byte) (RuntimePayloadInfo, error) {
+	ph, payloadRaw, declaredLen, err := findRuntimePayload(outputRaw)
+	if err != nil {
+		return RuntimePayloadInfo{}, err
+	}
+	sum := sha256.Sum256(payloadRaw)
+	return RuntimePayloadInfo{
+		SHA256:       hex.EncodeToString(sum[:]),
+		Size:         uint64(len(payloadRaw)),
+		DeclaredSize: declaredLen,
+		FileOffset:   ph.Off,
+		VAddr:        ph.Vaddr,
+	}, nil
 }
 
 func ReadManifest(path string) (*Manifest, error) {
