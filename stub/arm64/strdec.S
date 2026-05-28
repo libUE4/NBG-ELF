@@ -1245,16 +1245,17 @@ strdec_lazy_entry:
     ldr w6, [x5]
     adr x5, strdec_lazy_hash
     ldr w18, [x5]
-    mov w4, #0x5a7e
-    movk w4, #0xa5c3, lsl #16
+    adr x5, strdec_lazy_hash_mask
+    ldr w4, [x5]
     eor w18, w18, w4
     adr x5, strdec_lazy_table
     ldr x5, [x5]
     add x5, x5, x19
     mov w16, w6
-    mov w4, #0x79f5
-    movk w4, #0x6d2b, lsl #16
+    adr x17, strdec_lazy_hash_seed
+    ldr w4, [x17]
     eor w16, w16, w4
+    str w4, [sp, #208]
     mov w3, #0
     mov x17, x5
 .Llazy_hash_loop:
@@ -1282,8 +1283,7 @@ strdec_lazy_entry:
     b .Llazy_hash_loop
 .Llazy_hash_done:
     cbnz w16, .Llazy_hash_nonzero
-    mov w16, #0x79f5
-    movk w16, #0x6d2b, lsl #16
+    ldr w16, [sp, #208]
 .Llazy_hash_nonzero:
     cmp w16, w18
     b.eq .Llazy_hash_ok
@@ -1714,6 +1714,10 @@ strdec_lazy_count:
     .word 0x01234567
 strdec_lazy_hash:
     .word 0x89abcdef
+strdec_lazy_hash_seed:
+    .word 0x6d2b79f5
+strdec_lazy_hash_mask:
+    .word 0xa5c35a7e
 .balign 8
 strdec_lazy_table:
     .quad 0x123456789abcdef0

@@ -188,6 +188,14 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	meta.LazyHashSeed, err = randomUint32()
+	if err != nil {
+		return nil, err
+	}
+	meta.LazyHashMask, err = randomUint32()
+	if err != nil {
+		return nil, err
+	}
 	if err := fillRuntimeParams(&meta); err != nil {
 		return nil, err
 	}
@@ -265,7 +273,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 				return nil, fmt.Errorf("lazy callsite patch incomplete: patched %d/%d", patchedCallsites, len(dispatchEntries))
 			}
 			callsiteSelected = patchedCallsites
-			out = appendLazyDispatchTable(out, dispatchEntries, payloadVA)
+			out, err = appendLazyDispatchTable(out, dispatchEntries, payloadVA, meta)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -322,7 +333,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	lazyCoverage := callsiteCoveragePercent(callsiteSelected, len(callsiteCandidates))
 	runtimeTable := "encrypted-per-entry-row-resealed"
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
-		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded"
+		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded; lazy-dispatch-table-keyed-hash"
 	}
 	report := ProtectionReport{
 		Preset:              effectivePreset(opts.Preset),
