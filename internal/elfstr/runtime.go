@@ -13,42 +13,42 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0x11d4
-	stubHoneypotEntryOff    = 0x1940
-	stubAnchorOff           = 0x19e0
-	stubStaticVAOff         = 0x19e8
-	stubOrigEntryOff        = 0x19f0
-	stubPageVAOff           = 0x19f8
-	stubPageLenOff          = 0x1a00
-	stubPayloadLenOff       = 0x1a08
-	stubEntryCountOff       = 0x1a10
-	stubGuardSeedOff        = 0x1a14
-	stubTableSeedOff        = 0x1a18
-	stubKeySeedOff          = 0x1a1c
-	stubParamTableAOff      = 0x1a20
-	stubParamTableBOff      = 0x1a24
-	stubParamKeyIndexOff    = 0x1a28
-	stubParamStringPosOff   = 0x1a2c
-	stubParamStringIndexOff = 0x1a30
-	stubGuardHashOff        = 0x1a34
-	stubOrigEntryKeyOff     = 0x1a38
-	stubRuntimeTableHashOff = 0x1a40
-	stubRuntimeTableSeedOff = 0x1a44
-	stubRuntimeTableMaskOff = 0x1a48
-	stubTableOff            = 0x1a50
+	stubLazyEntryOff        = 0x1250
+	stubHoneypotEntryOff    = 0x19bc
+	stubAnchorOff           = 0x1a58
+	stubStaticVAOff         = 0x1a60
+	stubOrigEntryOff        = 0x1a68
+	stubPageVAOff           = 0x1a70
+	stubPageLenOff          = 0x1a78
+	stubPayloadLenOff       = 0x1a80
+	stubEntryCountOff       = 0x1a88
+	stubGuardSeedOff        = 0x1a8c
+	stubTableSeedOff        = 0x1a90
+	stubKeySeedOff          = 0x1a94
+	stubParamTableAOff      = 0x1a98
+	stubParamTableBOff      = 0x1a9c
+	stubParamKeyIndexOff    = 0x1aa0
+	stubParamStringPosOff   = 0x1aa4
+	stubParamStringIndexOff = 0x1aa8
+	stubGuardHashOff        = 0x1aac
+	stubOrigEntryKeyOff     = 0x1ab0
+	stubRuntimeTableHashOff = 0x1ab8
+	stubRuntimeTableSeedOff = 0x1abc
+	stubRuntimeTableMaskOff = 0x1ac0
+	stubTableOff            = 0x1ac8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1a68
-	stubLazyHashOff         = 0x1a6c
-	stubLazyHashSeedOff     = 0x1a70
-	stubLazyHashMaskOff     = 0x1a74
-	stubLazyMaskIndexMulOff = 0x1a78
-	stubLazyMaskPosMulOff   = 0x1a7c
-	stubLazyMaskBaseOff     = 0x1a80
-	stubLazyMaskRoundMulOff = 0x1a84
-	stubLazyTableOff        = 0x1a88
+	stubLazyCountOff        = 0x1ae0
+	stubLazyHashOff         = 0x1ae4
+	stubLazyHashSeedOff     = 0x1ae8
+	stubLazyHashMaskOff     = 0x1aec
+	stubLazyMaskIndexMulOff = 0x1af0
+	stubLazyMaskPosMulOff   = 0x1af4
+	stubLazyMaskBaseOff     = 0x1af8
+	stubLazyMaskRoundMulOff = 0x1afc
+	stubLazyTableOff        = 0x1b00
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1ad8
+	stubDataEndOff          = 0x1b50
 	stubRuntimeTableHash    = 0x13579bdf
 	stubRuntimeTableSeed    = 0x2468ace1
 	stubRuntimeTableMask    = 0xf0e1d2c3
@@ -909,12 +909,48 @@ func buildRuntimeStringTable(entries []Entry, keySeed, keyIndexParam uint32) []b
 }
 
 func cryptRuntimeTable(table []byte, tableSeed, tableA, tableB uint32) {
-	for pos := range table {
-		mask := tableSeed ^ (uint32(pos) * tableA) ^ (uint32(pos>>3) * tableB) ^ 0x9e3779b9
-		mask = mixXorShift32(mask)
-		mask += uint32(pos >> 8)
-		table[pos] ^= byte(mask)
+	cryptRuntimeTableWithMode(table, tableSeed, tableA, tableB, true)
+}
+
+func decryptRuntimeTableForTest(table []byte, tableSeed, tableA, tableB uint32) {
+	cryptRuntimeTableWithMode(table, tableSeed, tableA, tableB, false)
+}
+
+func cryptRuntimeTableWithMode(table []byte, tableSeed, tableA, tableB uint32, encrypt bool) {
+	for rowOff := 0; rowOff < len(table); rowOff += stubTableEntSize {
+		row := uint32(rowOff / stubTableEntSize)
+		chain := runtimeTableRowChain(tableSeed, tableA, row)
+		end := rowOff + stubTableEntSize
+		if end > len(table) {
+			end = len(table)
+		}
+		for pos := rowOff; pos < end; pos++ {
+			in := table[pos]
+			maskByte := runtimeTableMaskByte(tableSeed, tableA, tableB, uint32(pos)) ^ chain
+			out := in ^ maskByte
+			table[pos] = out
+			feedback := in
+			if encrypt {
+				feedback = out
+			}
+			chain = runtimeTableChainNext(chain, feedback, byte(pos))
+		}
 	}
+}
+
+func runtimeTableMaskByte(tableSeed, tableA, tableB, pos uint32) byte {
+	mask := tableSeed ^ (pos * tableA) ^ ((pos >> 3) * tableB) ^ 0x9e3779b9
+	mask = mixXorShift32(mask)
+	mask += pos >> 8
+	return byte(mask)
+}
+
+func runtimeTableRowChain(tableSeed, tableA, row uint32) byte {
+	return byte(tableSeed^row^(row>>8)^0xa7) + byte(tableA)
+}
+
+func runtimeTableChainNext(chain, feedback, pos byte) byte {
+	return bitsRotateLeft8(chain^feedback^pos, 3) + 0x3d
 }
 
 func hashRuntimeStringTable(table []byte, count, seed uint32) uint32 {
@@ -996,6 +1032,14 @@ func bitsRotateLeft32(v uint32, n uint) uint32 {
 		return v
 	}
 	return (v << n) | (v >> (32 - n))
+}
+
+func bitsRotateLeft8(v byte, n uint) byte {
+	n &= 7
+	if n == 0 {
+		return v
+	}
+	return (v << n) | (v >> (8 - n))
 }
 
 func packRuntimeLength(length uint32, variant uint8, tag uint8) uint32 {

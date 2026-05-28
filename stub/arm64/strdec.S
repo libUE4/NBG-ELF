@@ -911,11 +911,18 @@ strdec_entry:
 
     // Decrypt one 24-byte table entry. The loop shape intentionally avoids a
     // single canonical xorshift block that is easy to signature-match.
+    eor w6, w21, w26
+    eor w6, w6, w26, lsr #8
+    mov w5, #0xa7
+    eor w6, w6, w5
+    add w20, w6, w10
+    and w20, w20, #0xff
     mov w3, #0
 6:
     cmp w3, #24
     b.hs 7f
     ldrb w4, [x25, x3]
+    mov w19, w4
     add w27, w26, w26, lsl #1
     lsl w27, w27, #3
     add w27, w27, w3
@@ -932,8 +939,17 @@ strdec_entry:
     eor w5, w5, w5, lsl #5
     lsr w6, w27, #8
     add w5, w5, w6
+    eor w5, w5, w20
     eor w4, w4, w5
     strb w4, [x25, x3]
+    eor w20, w20, w19
+    eor w20, w20, w27
+    and w20, w20, #0xff
+    lsl w6, w20, #3
+    lsr w20, w20, #5
+    orr w20, w20, w6
+    add w20, w20, #0x3d
+    and w20, w20, #0xff
     add w3, w3, #1
     // Opaque control-flow edge: always falls through to the loop branch, but
     // breaks straight-line pattern matching in small decryptor signatures.
@@ -1188,6 +1204,12 @@ strdec_entry:
 .Lmain_content_mac_ok:
     // Re-seal only the runtime table entry; each row is readable for the
     // shortest possible window before the next entry is processed.
+    eor w6, w21, w26
+    eor w6, w6, w26, lsr #8
+    mov w5, #0xa7
+    eor w6, w6, w5
+    add w20, w6, w10
+    and w20, w20, #0xff
     mov w3, #0
 8:
     cmp w3, #24
@@ -1209,8 +1231,17 @@ strdec_entry:
     eor w5, w5, w5, lsl #5
     lsr w6, w27, #8
     add w5, w5, w6
+    eor w5, w5, w20
     eor w4, w4, w5
     strb w4, [x25, x3]
+    eor w20, w20, w4
+    eor w20, w20, w27
+    and w20, w20, #0xff
+    lsl w6, w20, #3
+    lsr w20, w20, #5
+    orr w20, w20, w6
+    add w20, w20, #0x3d
+    and w20, w20, #0xff
     add w3, w3, #1
     b 8b
 

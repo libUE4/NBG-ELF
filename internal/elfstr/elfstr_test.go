@@ -250,7 +250,7 @@ func TestRuntimeTableCryptAndSplitKeyRoundTrip(t *testing.T) {
 	if bytes.Equal(table, plain) {
 		t.Fatalf("table did not change after encryption")
 	}
-	cryptRuntimeTable(table, 0x13572468, 0x5d, 0x11)
+	decryptRuntimeTableForTest(table, 0x13572468, 0x5d, 0x11)
 	if !bytes.Equal(table, plain) {
 		t.Fatalf("table round-trip mismatch")
 	}
