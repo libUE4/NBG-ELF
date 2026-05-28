@@ -14,41 +14,41 @@ import (
 const (
 	stubEntryOff            = 0x50
 	stubLazyEntryOff        = 0x1250
-	stubHoneypotEntryOff    = 0x19bc
-	stubAnchorOff           = 0x1a58
-	stubStaticVAOff         = 0x1a60
-	stubOrigEntryOff        = 0x1a68
-	stubPageVAOff           = 0x1a70
-	stubPageLenOff          = 0x1a78
-	stubPayloadLenOff       = 0x1a80
-	stubEntryCountOff       = 0x1a88
-	stubGuardSeedOff        = 0x1a8c
-	stubTableSeedOff        = 0x1a90
-	stubKeySeedOff          = 0x1a94
-	stubParamTableAOff      = 0x1a98
-	stubParamTableBOff      = 0x1a9c
-	stubParamKeyIndexOff    = 0x1aa0
-	stubParamStringPosOff   = 0x1aa4
-	stubParamStringIndexOff = 0x1aa8
-	stubGuardHashOff        = 0x1aac
-	stubOrigEntryKeyOff     = 0x1ab0
-	stubRuntimeTableHashOff = 0x1ab8
-	stubRuntimeTableSeedOff = 0x1abc
-	stubRuntimeTableMaskOff = 0x1ac0
-	stubTableOff            = 0x1ac8
+	stubHoneypotEntryOff    = 0x1a0c
+	stubAnchorOff           = 0x1aa8
+	stubStaticVAOff         = 0x1ab0
+	stubOrigEntryOff        = 0x1ab8
+	stubPageVAOff           = 0x1ac0
+	stubPageLenOff          = 0x1ac8
+	stubPayloadLenOff       = 0x1ad0
+	stubEntryCountOff       = 0x1ad8
+	stubGuardSeedOff        = 0x1adc
+	stubTableSeedOff        = 0x1ae0
+	stubKeySeedOff          = 0x1ae4
+	stubParamTableAOff      = 0x1ae8
+	stubParamTableBOff      = 0x1aec
+	stubParamKeyIndexOff    = 0x1af0
+	stubParamStringPosOff   = 0x1af4
+	stubParamStringIndexOff = 0x1af8
+	stubGuardHashOff        = 0x1afc
+	stubOrigEntryKeyOff     = 0x1b00
+	stubRuntimeTableHashOff = 0x1b08
+	stubRuntimeTableSeedOff = 0x1b0c
+	stubRuntimeTableMaskOff = 0x1b10
+	stubTableOff            = 0x1b18
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1ae0
-	stubLazyHashOff         = 0x1ae4
-	stubLazyHashSeedOff     = 0x1ae8
-	stubLazyHashMaskOff     = 0x1aec
-	stubLazyMaskIndexMulOff = 0x1af0
-	stubLazyMaskPosMulOff   = 0x1af4
-	stubLazyMaskBaseOff     = 0x1af8
-	stubLazyMaskRoundMulOff = 0x1afc
-	stubLazyTableOff        = 0x1b00
+	stubLazyCountOff        = 0x1b30
+	stubLazyHashOff         = 0x1b34
+	stubLazyHashSeedOff     = 0x1b38
+	stubLazyHashMaskOff     = 0x1b3c
+	stubLazyMaskIndexMulOff = 0x1b40
+	stubLazyMaskPosMulOff   = 0x1b44
+	stubLazyMaskBaseOff     = 0x1b48
+	stubLazyMaskRoundMulOff = 0x1b4c
+	stubLazyTableOff        = 0x1b50
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1b50
+	stubDataEndOff          = 0x1ba0
 	stubRuntimeTableHash    = 0x13579bdf
 	stubRuntimeTableSeed    = 0x2468ace1
 	stubRuntimeTableMask    = 0xf0e1d2c3
@@ -749,13 +749,13 @@ func encodeLazyDispatchEntry(dst []byte, de LazyDispatchEntry, index uint32, met
 	binary.LittleEndian.PutUint32(plain[41:], lazyDispatchTag(de))
 	binary.LittleEndian.PutUint64(plain[48:], de.OrigTarget)
 	copy(dst, plain[:])
-	cryptLazyDispatchEntry(dst[:stubLazyEntSize], index, meta)
+	encryptLazyDispatchEntry(dst[:stubLazyEntSize], index, meta)
 }
 
 func decodeLazyDispatchEntry(src []byte, index uint32, meta RuntimeMeta) (LazyDispatchEntry, uint32, [3]byte) {
 	var raw [stubLazyEntSize]byte
 	copy(raw[:], src[:stubLazyEntSize])
-	cryptLazyDispatchEntry(raw[:], index, meta)
+	decryptLazyDispatchEntry(raw[:], index, meta)
 	return LazyDispatchEntry{
 		TextVA:     binary.LittleEndian.Uint64(raw[0:]),
 		StringVA:   binary.LittleEndian.Uint64(raw[8:]),
@@ -770,9 +770,30 @@ func decodeLazyDispatchEntry(src []byte, index uint32, meta RuntimeMeta) (LazyDi
 	}, binary.LittleEndian.Uint32(raw[41:]), [3]byte{raw[45], raw[46], raw[47]}
 }
 
-func cryptLazyDispatchEntry(buf []byte, index uint32, meta RuntimeMeta) {
-	for i := 0; i < stubLazyEntSize; i++ {
-		buf[i] ^= lazyDispatchMask(index, uint32(i), meta)
+func encryptLazyDispatchEntry(buf []byte, index uint32, meta RuntimeMeta) {
+	cryptLazyDispatchEntryWithMode(buf, index, meta, true)
+}
+
+func decryptLazyDispatchEntry(buf []byte, index uint32, meta RuntimeMeta) {
+	cryptLazyDispatchEntryWithMode(buf, index, meta, false)
+}
+
+func cryptLazyDispatchEntryWithMode(buf []byte, index uint32, meta RuntimeMeta, encrypt bool) {
+	chain := lazyDispatchEntryChain(index, meta)
+	limit := stubLazyEntSize
+	if len(buf) < limit {
+		limit = len(buf)
+	}
+	for i := 0; i < limit; i++ {
+		in := buf[i]
+		mask := lazyDispatchMask(index, uint32(i), meta) ^ chain
+		out := in ^ mask
+		buf[i] = out
+		feedback := in
+		if encrypt {
+			feedback = out
+		}
+		chain = lazyDispatchChainNext(chain, feedback, byte(index), byte(i))
 	}
 }
 
@@ -785,6 +806,17 @@ func lazyDispatchMask(index, pos uint32, meta RuntimeMeta) byte {
 	v ^= pos << 11
 	v ^= v >> 16
 	return byte(v)
+}
+
+func lazyDispatchEntryChain(index uint32, meta RuntimeMeta) byte {
+	v := meta.LazyMaskBase ^ meta.LazyHashSeed ^ index
+	v ^= v >> 8
+	v ^= 0xc3
+	return byte(v)
+}
+
+func lazyDispatchChainNext(chain, feedback, index, pos byte) byte {
+	return bitsRotateLeft8(chain^feedback^index^pos, 3) + 0x5d
 }
 
 func hashLazyDispatchTable(table []byte, count, seed uint32) uint32 {

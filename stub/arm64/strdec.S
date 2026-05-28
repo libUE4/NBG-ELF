@@ -1425,15 +1425,35 @@ strdec_lazy_entry:
 .Llazy_scan:
     cbz w6, .Llazy_return
     mov w18, w12
+    adr x16, strdec_lazy_mask_base
+    ldr w4, [x16]
+    adr x16, strdec_lazy_hash_seed
+    ldr w16, [x16]
+    eor w4, w4, w16
+    eor w4, w4, w18
+    eor w4, w4, w4, lsr #8
+    mov w16, #0xc3
+    eor w4, w4, w16
+    and w11, w4, #0xff
     mov w3, #0
 .Llazy_decode_scan:
     cmp w3, #56
     b.hs .Llazy_scan_decoded
     ldrb w7, [x5, x3]
     bl .Llazy_mask
+    eor w4, w4, w11
     eor w4, w4, w7
     add x17, sp, #224
     strb w4, [x17, x3]
+    eor w11, w11, w7
+    eor w11, w11, w18
+    eor w11, w11, w3
+    and w11, w11, #0xff
+    lsl w16, w11, #3
+    lsr w11, w11, #5
+    orr w11, w11, w16
+    add w11, w11, #0x5d
+    and w11, w11, #0xff
     add w3, w3, #1
     b .Llazy_decode_scan
 .Llazy_scan_decoded:

@@ -1763,9 +1763,9 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	}
 
 	decodeBuf := append([]byte(nil), corruptLen[base:base+stubLazyEntSize]...)
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	decryptLazyDispatchEntry(decodeBuf, 0, meta)
 	binary.LittleEndian.PutUint32(decodeBuf[16:], 0)
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	encryptLazyDispatchEntry(decodeBuf, 0, meta)
 	copy(corruptLen[base:base+stubLazyEntSize], decodeBuf)
 	binary.LittleEndian.PutUint32(corruptLen[stubLazyHashOff:], hashLazyDispatchTable(corruptLen[base:base+stubLazyEntSize], 1, meta.LazyHashSeed)^meta.LazyHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptLen, 1); err == nil {
@@ -1774,9 +1774,9 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 
 	corruptTag := append([]byte(nil), out...)
 	decodeBuf = append([]byte(nil), corruptTag[base:base+stubLazyEntSize]...)
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	decryptLazyDispatchEntry(decodeBuf, 0, meta)
 	decodeBuf[41] ^= 0xff
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	encryptLazyDispatchEntry(decodeBuf, 0, meta)
 	copy(corruptTag[base:base+stubLazyEntSize], decodeBuf)
 	binary.LittleEndian.PutUint32(corruptTag[stubLazyHashOff:], hashLazyDispatchTable(corruptTag[base:base+stubLazyEntSize], 1, meta.LazyHashSeed)^meta.LazyHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptTag, 1); err == nil {
@@ -1785,9 +1785,9 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 
 	corruptPad := append([]byte(nil), out...)
 	decodeBuf = append([]byte(nil), corruptPad[base:base+stubLazyEntSize]...)
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	decryptLazyDispatchEntry(decodeBuf, 0, meta)
 	decodeBuf[45] = 0xff
-	cryptLazyDispatchEntry(decodeBuf, 0, meta)
+	encryptLazyDispatchEntry(decodeBuf, 0, meta)
 	copy(corruptPad[base:base+stubLazyEntSize], decodeBuf)
 	binary.LittleEndian.PutUint32(corruptPad[stubLazyHashOff:], hashLazyDispatchTable(corruptPad[base:base+stubLazyEntSize], 1, meta.LazyHashSeed)^meta.LazyHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptPad, 1); err == nil {
