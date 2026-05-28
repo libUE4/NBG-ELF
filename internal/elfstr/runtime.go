@@ -13,32 +13,32 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0xfd4
-	stubHoneypotEntryOff    = 0x12ec
-	stubAnchorOff           = 0x1388
-	stubStaticVAOff         = 0x1390
-	stubOrigEntryOff        = 0x1398
-	stubPageVAOff           = 0x13a0
-	stubPageLenOff          = 0x13a8
-	stubPayloadLenOff       = 0x13b0
-	stubEntryCountOff       = 0x13b8
-	stubGuardSeedOff        = 0x13bc
-	stubTableSeedOff        = 0x13c0
-	stubKeySeedOff          = 0x13c4
-	stubParamTableAOff      = 0x13c8
-	stubParamTableBOff      = 0x13cc
-	stubParamKeyIndexOff    = 0x13d0
-	stubParamStringPosOff   = 0x13d4
-	stubParamStringIndexOff = 0x13d8
-	stubGuardHashOff        = 0x13dc
-	stubOrigEntryKeyOff     = 0x13e0
-	stubTableOff            = 0x13e8
+	stubLazyEntryOff        = 0xff8
+	stubHoneypotEntryOff    = 0x1310
+	stubAnchorOff           = 0x13b0
+	stubStaticVAOff         = 0x13b8
+	stubOrigEntryOff        = 0x13c0
+	stubPageVAOff           = 0x13c8
+	stubPageLenOff          = 0x13d0
+	stubPayloadLenOff       = 0x13d8
+	stubEntryCountOff       = 0x13e0
+	stubGuardSeedOff        = 0x13e4
+	stubTableSeedOff        = 0x13e8
+	stubKeySeedOff          = 0x13ec
+	stubParamTableAOff      = 0x13f0
+	stubParamTableBOff      = 0x13f4
+	stubParamKeyIndexOff    = 0x13f8
+	stubParamStringPosOff   = 0x13fc
+	stubParamStringIndexOff = 0x1400
+	stubGuardHashOff        = 0x1404
+	stubOrigEntryKeyOff     = 0x1408
+	stubTableOff            = 0x1410
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1400
-	stubLazyTableOff        = 0x1408
+	stubLazyCountOff        = 0x1428
+	stubLazyTableOff        = 0x1430
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1458
+	stubDataEndOff          = 0x1480
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -853,6 +853,7 @@ func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
 	if len(entries) == 0 {
 		return entries, 0, nil
 	}
+	pageVA, pageLen := stringPageWindow(entries)
 	decoyCount := len(entries)/3 + 64
 	if decoyCount > 1024 {
 		decoyCount = 1024
@@ -866,7 +867,7 @@ func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
 				return nil, 0, err
 			}
 			for ; n > 0 && decoyLeft > 0; n-- {
-				d, err := makeDecoyEntry(entries[(i+decoyLeft)%len(entries)].VAddr)
+				d, err := makeDecoyEntry(pageVA, pageLen)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -877,7 +878,7 @@ func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
 		out = append(out, entries[i])
 	}
 	for decoyLeft > 0 {
-		d, err := makeDecoyEntry(entries[decoyLeft%len(entries)].VAddr)
+		d, err := makeDecoyEntry(pageVA, pageLen)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -948,12 +949,16 @@ func lazyDispatchTag(de LazyDispatchEntry) uint32 {
 	return tag
 }
 
-func makeDecoyEntry(baseVA uint64) (Entry, error) {
+func makeDecoyEntry(pageVA, pageLen uint64) (Entry, error) {
 	key, err := randomUint32()
 	if err != nil {
 		return Entry{}, err
 	}
 	noise, err := randomUint32()
+	if err != nil {
+		return Entry{}, err
+	}
+	lengthNoise, err := randomIndex(64)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -969,16 +974,31 @@ func makeDecoyEntry(baseVA uint64) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
+	decoyVA := decoyVAOutsideWindow(pageVA, pageLen, noise)
 	return Entry{
 		Section: "<decoy>",
-		VAddr:   (baseVA &^ 0xfff) + uint64(noise&0xfff),
-		Length:  0,
+		VAddr:   decoyVA,
+		Length:  8 + lengthNoise,
 		Phase:   "decoy",
 		Key:     key,
 		SaltA:   saltA,
 		SaltB:   saltB,
 		Variant: uint8(variant),
 	}, nil
+}
+
+func decoyVAOutsideWindow(pageVA, pageLen uint64, noise uint32) uint64 {
+	offset := 0x1000 + uint64(noise&0xffff)
+	if pageVA != 0 && pageLen != 0 {
+		windowEnd := pageVA + pageLen
+		if windowEnd >= pageVA && windowEnd <= ^uint64(0)-offset {
+			return windowEnd + offset
+		}
+		if pageVA > offset+0x1000 {
+			return pageVA - offset - 0x1000
+		}
+	}
+	return 0x100000000 + uint64(noise&0xfffff)
 }
 
 func buildRuntimeMeta(meta RuntimeMeta) []byte {
@@ -1084,20 +1104,23 @@ func mixXorShift32(v uint32) uint32 {
 }
 
 func stringPageWindow(entries []Entry) (uint64, uint64) {
-	if len(entries) == 0 {
-		return 0, 0
-	}
-	start := entries[0].VAddr &^ 0xfff
-	end := alignUp(entries[0].VAddr+uint64(entries[0].Length), 0x1000)
-	for _, e := range entries[1:] {
+	start := uint64(0)
+	end := uint64(0)
+	for _, e := range entries {
+		if e.Length <= 0 || e.Section == "<decoy>" {
+			continue
+		}
 		s := e.VAddr &^ 0xfff
 		n := alignUp(e.VAddr+uint64(e.Length), 0x1000)
-		if s < start {
+		if start == 0 || s < start {
 			start = s
 		}
 		if n > end {
 			end = n
 		}
+	}
+	if start == 0 || end <= start {
+		return 0, 0
 	}
 	return start, end - start
 }

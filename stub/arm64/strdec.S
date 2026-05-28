@@ -978,6 +978,19 @@ strdec_entry:
     brk #0x7a9
 .Lentry_tag_ok:
 
+    // Decoy rows carry valid tags and non-zero lengths, but point outside the
+    // real string page window. Keep their table rows plausible without touching
+    // process memory.
+    adr x20, strdec_page_va
+    ldr x8, [x20]
+    cmp x7, x8
+    b.lo 4f
+    adr x20, strdec_page_len
+    ldr x27, [x20]
+    add x27, x8, x27
+    cmp x7, x27
+    b.hs 4f
+
     mov w28, w2
     eor w28, w28, w7
     lsr x8, x7, #32

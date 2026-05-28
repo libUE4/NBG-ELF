@@ -211,7 +211,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
 	}
 	for _, e := range runtimeEntries {
-		if e.Length == 0 {
+		if e.Length == 0 || e.Section == "<decoy>" {
 			continue
 		}
 		if _, ok := lazyStringVAs[e.VAddr]; ok {

@@ -237,11 +237,21 @@ func TestRuntimeEntriesFilterDoesNotMutateTable(t *testing.T) {
 	}
 	realOrderMatchesInput := true
 	realPos := 0
+	nonZeroDecoys := 0
+	pageVA, pageLen := stringPageWindow(entries)
+	pageEnd := pageVA + pageLen
 	for i, e := range table {
 		if e.RuntimeIndex != i {
 			t.Fatalf("runtime index mismatch at table slot %d: got %d", i, e.RuntimeIndex)
 		}
 		if e.Section == "<decoy>" {
+			if e.Length <= 0 {
+				t.Fatalf("decoy at table slot %d has empty length", i)
+			}
+			if pageVA <= e.VAddr && e.VAddr < pageEnd {
+				t.Fatalf("decoy at table slot %d points inside real string page window: va=%#x window=%#x-%#x", i, e.VAddr, pageVA, pageEnd)
+			}
+			nonZeroDecoys++
 			continue
 		}
 		if realPos >= len(entries) || e.VAddr != entries[realPos].VAddr {
@@ -251,6 +261,24 @@ func TestRuntimeEntriesFilterDoesNotMutateTable(t *testing.T) {
 	}
 	if realOrderMatchesInput {
 		t.Fatalf("runtime table preserved original real-entry order; expected full-table shuffle")
+	}
+	if nonZeroDecoys != decoys {
+		t.Fatalf("non-zero decoys got %d want %d", nonZeroDecoys, decoys)
+	}
+}
+
+func TestStringPageWindowIgnoresDecoys(t *testing.T) {
+	entries := []Entry{
+		{Section: "<decoy>", VAddr: 0x10000000, Length: 64},
+		{Section: ".rodata", VAddr: 0x401234, Length: 16},
+		{Section: "<decoy>", VAddr: 0x20000000, Length: 32},
+	}
+	pageVA, pageLen := stringPageWindow(entries)
+	if pageVA != 0x401000 || pageLen != 0x1000 {
+		t.Fatalf("page window got va=%#x len=%#x want real string page only", pageVA, pageLen)
+	}
+	if pageVA, pageLen := stringPageWindow([]Entry{{Section: "<decoy>", VAddr: 0x10000000, Length: 64}}); pageVA != 0 || pageLen != 0 {
+		t.Fatalf("decoy-only window got va=%#x len=%#x", pageVA, pageLen)
 	}
 }
 
