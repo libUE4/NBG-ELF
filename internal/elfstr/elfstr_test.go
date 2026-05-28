@@ -1304,6 +1304,46 @@ func TestManifestSelfHashDetectsMetadataTamper(t *testing.T) {
 	}
 }
 
+func TestManifestHMACDetectsMetadataTamper(t *testing.T) {
+	key := []byte("release-manifest-key")
+	m := &Manifest{
+		Schema:       Schema,
+		Tool:         "nbg-elf",
+		OutputPath:   "out.vmp",
+		OutputSHA256: "abc123",
+		EntryCount:   7,
+	}
+	sum, err := ComputeManifestHMACSHA256(m, key)
+	if err != nil {
+		t.Fatalf("compute manifest hmac: %v", err)
+	}
+	m.ManifestHMAC = &ManifestHMACInfo{
+		Algorithm:  ManifestHMACAlgorithm,
+		KeyID:      "release",
+		HMACSHA256: sum,
+	}
+	if err := ValidateManifestHMAC(m, key); err != nil {
+		t.Fatalf("validate manifest hmac: %v", err)
+	}
+	m.EntryCount++
+	if err := ValidateManifestHMAC(m, key); err == nil {
+		t.Fatalf("expected manifest hmac mismatch after metadata tamper")
+	}
+}
+
+func TestDecodeManifestHMACKeySupportsHexPrefix(t *testing.T) {
+	got, err := DecodeManifestHMACKey("hex:616263")
+	if err != nil {
+		t.Fatalf("decode hex key: %v", err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("decoded key got %q", string(got))
+	}
+	if _, err := DecodeManifestHMACKey("hex:not-hex"); err == nil {
+		t.Fatalf("expected invalid hex key error")
+	}
+}
+
 func TestValidateManifestRuntimeTableProfileCatchesMetadataMismatch(t *testing.T) {
 	m := &Manifest{
 		EntryCount: 4,

@@ -146,7 +146,7 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 			CallsiteMode: "aarch64-lazy-decrypt-patch",
 		},
 	}
-	audit := buildManifestAudit(manifestPath, m)
+	audit := buildManifestAudit(manifestPath, m, "")
 	if audit.Preset != elfstr.PresetAggressive || audit.ControlFlow != "test-cfg" {
 		t.Fatalf("audit metadata = %+v", audit)
 	}
@@ -218,7 +218,7 @@ func TestBuildManifestAuditValidatesInputSHA256(t *testing.T) {
 		OutputPath:  "missing-output.vmp",
 		InputSHA256: "wrong",
 	}
-	audit := buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m)
+	audit := buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m, "")
 	checks := map[string]auditCheck{}
 	for _, check := range audit.Checks {
 		checks[check.Name] = check
@@ -227,7 +227,7 @@ func TestBuildManifestAuditValidatesInputSHA256(t *testing.T) {
 		t.Fatalf("input_sha256 mismatch check = %+v", checks["input_sha256"])
 	}
 	m.InputSHA256 = checks["input_sha256"].Detail
-	audit = buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m)
+	audit = buildManifestAudit(filepath.Join(dir, "out.manifest.json"), m, "")
 	checks = map[string]auditCheck{}
 	for _, check := range audit.Checks {
 		checks[check.Name] = check
@@ -250,7 +250,7 @@ func TestBuildManifestAuditValidatesManifestSelfHash(t *testing.T) {
 		t.Fatalf("compute manifest hash: %v", err)
 	}
 	m.ManifestSHA256 = sum
-	audit := buildManifestAudit(manifestPath, m)
+	audit := buildManifestAudit(manifestPath, m, "")
 	checks := map[string]auditCheck{}
 	for _, check := range audit.Checks {
 		checks[check.Name] = check
@@ -259,13 +259,45 @@ func TestBuildManifestAuditValidatesManifestSelfHash(t *testing.T) {
 		t.Fatalf("manifest_sha256 check = %+v", checks["manifest_sha256"])
 	}
 	m.OutputPath = "tampered.vmp"
-	audit = buildManifestAudit(manifestPath, m)
+	audit = buildManifestAudit(manifestPath, m, "")
 	checks = map[string]auditCheck{}
 	for _, check := range audit.Checks {
 		checks[check.Name] = check
 	}
 	if checks["manifest_sha256"].Status != "invalid" {
 		t.Fatalf("manifest_sha256 tamper check = %+v", checks["manifest_sha256"])
+	}
+}
+
+func TestManifestHMACAuditCheckValidatesEnvKey(t *testing.T) {
+	t.Setenv("NBG_TEST_MANIFEST_KEY", "release-secret")
+	m := &elfstr.Manifest{
+		Schema:       elfstr.Schema,
+		OutputPath:   "out.vmp",
+		EntryCount:   3,
+		OutputSHA256: "abc123",
+	}
+	hmacHex, err := elfstr.ComputeManifestHMACSHA256(m, []byte("release-secret"))
+	if err != nil {
+		t.Fatalf("compute hmac: %v", err)
+	}
+	m.ManifestHMAC = &elfstr.ManifestHMACInfo{
+		Algorithm:  elfstr.ManifestHMACAlgorithm,
+		KeyID:      "release",
+		HMACSHA256: hmacHex,
+	}
+	check := manifestHMACAuditCheck(m, "NBG_TEST_MANIFEST_KEY")
+	if check.Status != "ok" || check.Detail != "release" {
+		t.Fatalf("manifest_hmac check = %+v", check)
+	}
+	check = manifestHMACAuditCheck(m, "")
+	if check.Status != "skipped" {
+		t.Fatalf("manifest_hmac without env = %+v", check)
+	}
+	m.EntryCount++
+	check = manifestHMACAuditCheck(m, "NBG_TEST_MANIFEST_KEY")
+	if check.Status != "invalid" {
+		t.Fatalf("manifest_hmac after tamper = %+v", check)
 	}
 }
 

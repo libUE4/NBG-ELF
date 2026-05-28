@@ -71,6 +71,8 @@ func runEncrypt(args []string) {
 	minLen := fs.Int("min", 6, "最小字符串长度")
 	includeData := fs.Bool("data", false, "同时加密 .data 段")
 	watermark := fs.String("watermark", "", "可选水印标识，将以哈希形式嵌入")
+	manifestKeyEnv := fs.String("manifest-key-env", "", "可选 manifest HMAC 密钥环境变量名；密钥不会写入 manifest")
+	manifestKeyID := fs.String("manifest-key-id", "", "可选 manifest HMAC key id，仅记录标识不记录密钥")
 	manifestDetail := fs.Bool("manifest-detail", false, "诊断模式: 在 manifest 中记录每个字符串的偏移和哈希；会阻止 commercial-ready 等级")
 	keepSections := fs.Bool("keep-sections", false, "保留加密输出的节表（抗静态分析能力较弱）")
 	noAntiFridaExtra := fs.Bool("no-anti-frida-extra", false, "兼容性测试: 禁用额外 Frida/Gum/Gadget maps 与 fd-link 运行时探测")
@@ -108,6 +110,8 @@ func runEncrypt(args []string) {
 		IncludeData:    *includeData,
 		Watermark:      *watermark,
 		ManifestDetail: *manifestDetail,
+		ManifestKeyEnv: *manifestKeyEnv,
+		ManifestKeyID:  *manifestKeyID,
 	}
 	cfg.ApplyToOptions(&opts)
 	applyEncryptFlagOverrides(fs, &opts, map[string]func(){
@@ -135,7 +139,7 @@ func runEncrypt(args []string) {
 		fatal(err)
 	}
 	if *minGrade != "" || *auditPath != "" {
-		audit := buildManifestAudit(manifestPath, m)
+		audit := buildManifestAudit(manifestPath, m, *manifestKeyEnv)
 		if *auditPath != "" {
 			if err := writeJSONFile(*auditPath, audit, 0o644); err != nil {
 				fatal(err)
@@ -231,6 +235,7 @@ type manifestAudit struct {
 	CallsiteMode   string        `json:"callsite_mode,omitempty"`
 	Artifact       auditArtifact `json:"artifact"`
 	Capabilities   auditFeatures `json:"capabilities"`
+	ManifestKeyEnv string        `json:"manifest_key_env,omitempty"`
 	Summary        auditSummary  `json:"summary"`
 	Checks         []auditCheck  `json:"checks"`
 }
@@ -245,6 +250,7 @@ type auditArtifact struct {
 	CodeSegmentCount     int    `json:"code_segment_count,omitempty"`
 	ProtectedSlotSHA256  string `json:"protected_slot_sha256,omitempty"`
 	ProtectedSlotCount   int    `json:"protected_slot_count,omitempty"`
+	ManifestHMACKeyID    string `json:"manifest_hmac_key_id,omitempty"`
 }
 
 type auditFeatures struct {
@@ -263,6 +269,7 @@ type auditFeatures struct {
 	AntiDebug         bool `json:"anti_debug"`
 	AntiFrida         bool `json:"anti_frida"`
 	ManifestSealed    bool `json:"manifest_sealed"`
+	ManifestSigned    bool `json:"manifest_signed"`
 	Watermarked       bool `json:"watermarked"`
 }
 
@@ -280,18 +287,19 @@ type auditCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
+func buildManifestAudit(manifestPath string, m *elfstr.Manifest, manifestKeyEnv string) manifestAudit {
 	inputPath := resolveManifestInputPath(manifestPath, m.InputPath)
 	outputPath := resolveManifestOutputPath(manifestPath, m.OutputPath)
 	audit := manifestAudit{
-		Schema:        m.Schema,
-		InputPath:     m.InputPath,
-		OutputPath:    m.OutputPath,
-		EntryCount:    m.EntryCount,
-		EncryptedSize: m.EncryptedSize,
-		Preset:        m.Report.Preset,
-		ControlFlow:   m.Protection.ControlFlow,
-		CallsiteMode:  m.Protection.CallsiteMode,
+		Schema:         m.Schema,
+		InputPath:      m.InputPath,
+		OutputPath:     m.OutputPath,
+		EntryCount:     m.EntryCount,
+		EncryptedSize:  m.EncryptedSize,
+		Preset:         m.Report.Preset,
+		ControlFlow:    m.Protection.ControlFlow,
+		CallsiteMode:   m.Protection.CallsiteMode,
+		ManifestKeyEnv: strings.TrimSpace(manifestKeyEnv),
 		Artifact: auditArtifact{
 			ManifestSHA256:       m.ManifestSHA256,
 			InputSHA256:          m.InputSHA256,
@@ -302,6 +310,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 			CodeSegmentCount:     len(m.CodeSegments),
 			ProtectedSlotSHA256:  m.ProtectedSlots.SHA256,
 			ProtectedSlotCount:   m.ProtectedSlots.Count,
+			ManifestHMACKeyID:    manifestHMACKeyID(m),
 		},
 		Capabilities: auditCapabilities(m),
 	}
@@ -320,6 +329,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "manifest_sha256", Status: "ok", Detail: m.ManifestSHA256})
 	}
+	audit.Checks = append(audit.Checks, manifestHMACAuditCheck(m, manifestKeyEnv))
 	if err := elfstr.ValidateManifestRuntimeStub(m); err != nil {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_stub", Status: "invalid", Detail: err.Error()})
 	} else {
@@ -416,6 +426,35 @@ func appendFileSHA256Check(audit *manifestAudit, name, path, want string) {
 	}
 }
 
+func manifestHMACKeyID(m *elfstr.Manifest) string {
+	if m.ManifestHMAC == nil {
+		return ""
+	}
+	return m.ManifestHMAC.KeyID
+}
+
+func manifestHMACAuditCheck(m *elfstr.Manifest, envName string) auditCheck {
+	if m.ManifestHMAC == nil {
+		return auditCheck{Name: "manifest_hmac", Status: "skipped", Detail: "manifest HMAC not present"}
+	}
+	envName = strings.TrimSpace(envName)
+	if envName == "" {
+		return auditCheck{Name: "manifest_hmac", Status: "skipped", Detail: "manifest HMAC key env not provided"}
+	}
+	value, ok := os.LookupEnv(envName)
+	if !ok {
+		return auditCheck{Name: "manifest_hmac", Status: "unavailable", Detail: "manifest HMAC key env " + envName + " is not set"}
+	}
+	key, err := elfstr.DecodeManifestHMACKey(value)
+	if err != nil {
+		return auditCheck{Name: "manifest_hmac", Status: "invalid", Detail: err.Error()}
+	}
+	if err := elfstr.ValidateManifestHMAC(m, key); err != nil {
+		return auditCheck{Name: "manifest_hmac", Status: "invalid", Detail: err.Error()}
+	}
+	return auditCheck{Name: "manifest_hmac", Status: "ok", Detail: manifestHMACKeyID(m)}
+}
+
 func finalizeManifestAudit(audit manifestAudit, m *elfstr.Manifest) manifestAudit {
 	audit.Summary = buildAuditSummary(audit, m)
 	return audit
@@ -438,6 +477,7 @@ func auditCapabilities(m *elfstr.Manifest) auditFeatures {
 		AntiDebug:         m.Protection.AntiDebug != "",
 		AntiFrida:         m.Protection.AntiFrida != "",
 		ManifestSealed:    m.ManifestSHA256 != "",
+		ManifestSigned:    m.ManifestHMAC != nil && m.ManifestHMAC.HMACSHA256 != "",
 		Watermarked:       m.Protection.Watermarked,
 	}
 }
@@ -658,6 +698,7 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 func printAuditCheck(check auditCheck) {
 	labels := map[string]string{
 		"manifest_sha256":  "manifest_sha256",
+		"manifest_hmac":    "manifest_hmac",
 		"input_sha256":     "输入_sha256",
 		"output_sha256":    "输出_sha256",
 		"output_structure": "输出结构",
@@ -676,7 +717,7 @@ func printAuditCheck(check auditCheck) {
 	}
 	switch check.Status {
 	case "ok":
-		if (check.Name == "input_sha256" || check.Name == "output_sha256" || check.Name == "manifest_sha256") && check.Detail != "" {
+		if (check.Name == "input_sha256" || check.Name == "output_sha256" || check.Name == "manifest_sha256" || check.Name == "manifest_hmac") && check.Detail != "" {
 			fmt.Printf("%s: %s (ok)\n", label, check.Detail)
 		} else {
 			fmt.Printf("%s: ok\n", label)
@@ -745,16 +786,17 @@ func runManifest(args []string) {
 	strict := fs.Bool("strict", false, "当 output_sha256 不匹配或输出文件缺失时返回非零退出码")
 	jsonOutput := fs.Bool("json", false, "以 JSON 输出 manifest 审计结果")
 	minGrade := fs.String("min-grade", "", "要求最低审计等级: review-needed, hardened, commercial-ready")
+	manifestKeyEnv := fs.String("manifest-key-env", "", "可选 manifest HMAC 密钥环境变量名，用于验证 manifest_hmac")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>")
+		fmt.Fprintln(os.Stderr, "用法: nbg-elf manifest [-strict] [-json] [-min-grade hardened|commercial-ready] [-manifest-key-env ENV] <manifest.json>")
 		os.Exit(2)
 	}
 	m, err := elfstr.ReadManifest(fs.Arg(0))
 	if err != nil {
 		fatal(err)
 	}
-	audit := buildManifestAudit(fs.Arg(0), m)
+	audit := buildManifestAudit(fs.Arg(0), m, *manifestKeyEnv)
 	if *jsonOutput {
 		raw, err := json.MarshalIndent(audit, "", "  ")
 		if err != nil {
@@ -832,11 +874,12 @@ func usage() {
 命令:
   inspect [选项] <input.elf>
   encrypt [-preset safe|balanced|aggressive] [-audit audit.json] [-min-grade hardened|commercial-ready] [选项] <input.elf>
-  manifest [-strict] [-json] [-min-grade hardened|commercial-ready] <manifest.json>
-  verify [-min-grade hardened|commercial-ready] <manifest.json>
+  manifest [-strict] [-json] [-manifest-key-env ENV] [-min-grade hardened|commercial-ready] <manifest.json>
+  verify [-manifest-key-env ENV] [-min-grade hardened|commercial-ready] <manifest.json>
 
 说明:
   encrypt -report -json 会以机器可读 JSON 输出保护计划；encrypt -audit/-min-grade 会在生成后执行审计。
+  encrypt -manifest-key-env ENV 会用环境变量中的 HMAC key 封印 manifest；verify/manifest 用同名选项校验。
   commercial-ready 要求 aggressive 保护、真实 lazy callsite 补丁、反篡改 seal 和无诊断明细。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
   manifest 会打印保护元数据、审计评分，并在输出文件可访问时校验 output_sha256。

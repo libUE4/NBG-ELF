@@ -2,6 +2,7 @@ package elfstr
 
 import (
 	"bytes"
+	"crypto/hmac"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"debug/elf"
@@ -26,6 +27,7 @@ const (
 	defaultMinLen            = 6
 	runtimeStageCount        = 4
 	plaintextResidueAuditMin = 8
+	ManifestHMACAlgorithm    = "HMAC-SHA256"
 )
 
 type Options struct {
@@ -42,6 +44,8 @@ type Options struct {
 	LazyCallsiteLimit  int
 	NoAntiFridaExtra   bool
 	SafeScan           bool
+	ManifestKeyEnv     string
+	ManifestKeyID      string
 }
 
 type Manifest struct {
@@ -64,11 +68,18 @@ type Manifest struct {
 	InputSHA256    string             `json:"input_sha256"`
 	OutputSHA256   string             `json:"output_sha256"`
 	ManifestSHA256 string             `json:"manifest_sha256,omitempty"`
+	ManifestHMAC   *ManifestHMACInfo  `json:"manifest_hmac,omitempty"`
 	MinLen         int                `json:"min_len"`
 	IncludeData    bool               `json:"include_data"`
 	EntryCount     int                `json:"entry_count"`
 	EncryptedSize  int                `json:"encrypted_size"`
 	Entries        []Entry            `json:"entries"`
+}
+
+type ManifestHMACInfo struct {
+	Algorithm  string `json:"algorithm"`
+	KeyID      string `json:"key_id,omitempty"`
+	HMACSHA256 string `json:"hmac_sha256"`
 }
 
 type ManifestOptions struct {
@@ -82,6 +93,7 @@ type ManifestOptions struct {
 	LazyCallsiteLimit  int    `json:"lazy_callsite_limit,omitempty"`
 	NoAntiFridaExtra   bool   `json:"no_anti_frida_extra,omitempty"`
 	ManifestDetail     bool   `json:"manifest_detail,omitempty"`
+	ManifestKeyID      string `json:"manifest_key_id,omitempty"`
 }
 
 type RuntimeStubInfo struct {
@@ -368,6 +380,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if !opts.ManifestDetail {
 		storedEntries = nil
 	}
+	manifestHMACKey, err := manifestHMACKeyFromEnv(opts.ManifestKeyEnv)
+	if err != nil {
+		return nil, err
+	}
 	manifestPhase := "entrypoint-pre-main:staged; runtime-self-check; anti-debug-best-effort; anti-frida-maps-probe; core-dump-disabled; decrypted-pages-dontdump; runtime-payload-dontdump; runtime-payload-resealed; section-table-stripped"
 	if opts.KeepSections {
 		manifestPhase = "entrypoint-pre-main:staged; runtime-self-check; anti-debug-best-effort; anti-frida-maps-probe; core-dump-disabled; decrypted-pages-dontdump; runtime-payload-dontdump; runtime-payload-resealed"
@@ -435,6 +451,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			LazyCallsiteLimit:  opts.LazyCallsiteLimit,
 			NoAntiFridaExtra:   opts.NoAntiFridaExtra,
 			ManifestDetail:     opts.ManifestDetail,
+			ManifestKeyID:      strings.TrimSpace(opts.ManifestKeyID),
 		},
 		RuntimeStub:    runtimeStubInfo(),
 		RuntimePayload: runtimePayload,
@@ -482,6 +499,11 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	}
 	if err := writeManifest(manifestPath, m); err != nil {
 		return nil, err
+	}
+	if len(manifestHMACKey) > 0 {
+		if err := sealManifestHMAC(manifestPath, m, manifestHMACKey, opts.ManifestKeyID); err != nil {
+			return nil, err
+		}
 	}
 	return m, nil
 }
@@ -1006,6 +1028,7 @@ func ReadManifest(path string) (*Manifest, error) {
 func ComputeManifestSHA256(m *Manifest) (string, error) {
 	canonical := *m
 	canonical.ManifestSHA256 = ""
+	canonical.ManifestHMAC = nil
 	raw, err := json.Marshal(canonical)
 	if err != nil {
 		return "", err
@@ -1026,6 +1049,65 @@ func ValidateManifestSelfHash(m *Manifest) error {
 		return fmt.Errorf("manifest self hash mismatch: got %s want %s", got, m.ManifestSHA256)
 	}
 	return nil
+}
+
+func ComputeManifestHMACSHA256(m *Manifest, key []byte) (string, error) {
+	if len(key) == 0 {
+		return "", fmt.Errorf("manifest HMAC key is empty")
+	}
+	canonical := *m
+	canonical.ManifestSHA256 = ""
+	canonical.ManifestHMAC = nil
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(raw)
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func ValidateManifestHMAC(m *Manifest, key []byte) error {
+	if m.ManifestHMAC == nil {
+		return fmt.Errorf("manifest HMAC missing")
+	}
+	if m.ManifestHMAC.Algorithm != ManifestHMACAlgorithm {
+		return fmt.Errorf("unsupported manifest HMAC algorithm %q", m.ManifestHMAC.Algorithm)
+	}
+	got, err := ComputeManifestHMACSHA256(m, key)
+	if err != nil {
+		return err
+	}
+	want, err := hex.DecodeString(m.ManifestHMAC.HMACSHA256)
+	if err != nil {
+		return fmt.Errorf("manifest HMAC is not hex: %w", err)
+	}
+	gotRaw, err := hex.DecodeString(got)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(gotRaw, want) {
+		return fmt.Errorf("manifest HMAC mismatch")
+	}
+	return nil
+}
+
+func DecodeManifestHMACKey(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, fmt.Errorf("manifest HMAC key is empty")
+	}
+	if strings.HasPrefix(value, "hex:") {
+		raw, err := hex.DecodeString(strings.TrimPrefix(value, "hex:"))
+		if err != nil {
+			return nil, fmt.Errorf("decode hex manifest HMAC key: %w", err)
+		}
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("manifest HMAC key is empty")
+		}
+		return raw, nil
+	}
+	return []byte(value), nil
 }
 
 func wantedSection(name string, includeData bool, safeScan bool) bool {
@@ -1357,6 +1439,35 @@ func writeManifest(path string, m *Manifest) error {
 	}
 	raw = append(raw, '\n')
 	return writeFileAtomic(path, raw, 0o644)
+}
+
+func manifestHMACKeyFromEnv(envName string) ([]byte, error) {
+	envName = strings.TrimSpace(envName)
+	if envName == "" {
+		return nil, nil
+	}
+	value, ok := os.LookupEnv(envName)
+	if !ok {
+		return nil, fmt.Errorf("manifest HMAC key env %s is not set", envName)
+	}
+	key, err := DecodeManifestHMACKey(value)
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func sealManifestHMAC(path string, m *Manifest, key []byte, keyID string) error {
+	hmacHex, err := ComputeManifestHMACSHA256(m, key)
+	if err != nil {
+		return err
+	}
+	m.ManifestHMAC = &ManifestHMACInfo{
+		Algorithm:  ManifestHMACAlgorithm,
+		KeyID:      strings.TrimSpace(keyID),
+		HMACSHA256: hmacHex,
+	}
+	return writeManifest(path, m)
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
