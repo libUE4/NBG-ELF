@@ -800,6 +800,7 @@ func usage() {
 
 说明:
   encrypt -report -json 会以机器可读 JSON 输出保护计划；encrypt -audit/-min-grade 会在生成后执行审计。
+  commercial-ready 要求 aggressive 保护、真实 lazy callsite 补丁、反篡改 seal 和无诊断明细。
   运行时注入输出不支持 decrypt；请保留原始 ELF 作为源产物。
   manifest 会打印保护元数据、审计评分，并在输出文件可访问时校验 output_sha256。
   verify 等价于 manifest -strict。`)

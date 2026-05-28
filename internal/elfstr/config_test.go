@@ -117,6 +117,21 @@ func TestProtectionWarningsIncludeSkippedCallsites(t *testing.T) {
 	}
 }
 
+func TestProtectionWarningsIncludeCommercialDowngradeFlags(t *testing.T) {
+	warnings := protectionWarnings(Options{
+		ManifestDetail:     true,
+		LazyCallsiteDryRun: true,
+		SafeScan:           true,
+		KeepSections:       true,
+		NoAntiFridaExtra:   true,
+	}, 0, 0)
+	for _, want := range []string{"manifest-detail", "dry-run", "safe-scan", "节表", "反 Frida"} {
+		if !containsWarning(warnings, want) {
+			t.Fatalf("warnings missing %q: %#v", want, warnings)
+		}
+	}
+}
+
 func TestPlanProtectionFallbackDoesNotReportLazyPatchWithoutCandidates(t *testing.T) {
 	raw := syntheticPlanELF([]byte("protected fixture string\x00"))
 	report, err := PlanProtectionBytes(raw, Options{LazyCallsite: true, LazyCallsiteLimit: 8})
@@ -179,6 +194,15 @@ func syntheticPlanELF(rodataContent []byte) []byte {
 	raw = append(raw, shstrtab...)
 	raw = append(raw, sections...)
 	return raw
+}
+
+func containsWarning(warnings []string, substr string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func alignInt(v, align int) int {

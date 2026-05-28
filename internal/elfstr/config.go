@@ -271,6 +271,15 @@ func effectiveFailurePolicy(policy string) string {
 
 func protectionWarnings(opts Options, candidates, selected int) []string {
 	var warnings []string
+	if opts.ManifestDetail {
+		warnings = append(warnings, "manifest-detail 会暴露受保护字符串偏移和哈希，仅用于诊断并会阻止 commercial-ready")
+	}
+	if opts.LazyCallsiteDryRun {
+		warnings = append(warnings, "lazy 调用点处于 dry-run，仅报告候选位置，不会写入按需解密补丁")
+	}
+	if opts.SafeScan {
+		warnings = append(warnings, "safe-scan 为兼容模式，扫描范围更保守，可能降低保护覆盖率")
+	}
 	if opts.LazyCallsite && selected == 0 {
 		warnings = append(warnings, "已请求 lazy 调用点补丁，但没有选中保守候选")
 	}
@@ -279,6 +288,9 @@ func protectionWarnings(opts Options, candidates, selected int) []string {
 	}
 	if opts.KeepSections {
 		warnings = append(warnings, "为兼容性保留了节表，抗静态分析能力会降低")
+	}
+	if opts.NoAntiFridaExtra {
+		warnings = append(warnings, "已关闭额外反 Frida 探测，运行时环境检查强度会降低")
 	}
 	return warnings
 }
