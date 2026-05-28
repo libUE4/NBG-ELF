@@ -1201,6 +1201,13 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 			FileOffset:   0x5000,
 			VAddr:        0x7000,
 		},
+		CodeSegments: []CodeSegmentInfo{{
+			SHA256:     "code123",
+			Size:       0x3000,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      pfR | pfX,
+		}},
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -1218,6 +1225,9 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["runtime_payload"]; !ok {
 		t.Fatalf("manifest json missing runtime_payload: %s", raw)
+	}
+	if _, ok := decoded["code_segments"]; !ok {
+		t.Fatalf("manifest json missing code_segments: %s", raw)
 	}
 	if _, ok := decoded["config"]; !ok {
 		t.Fatalf("manifest json missing config: %s", raw)
@@ -1434,9 +1444,24 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime payload info: %v", err)
 	}
-	m := &Manifest{RuntimePayload: payloadInfo}
+	codeSegments, err := codeSegmentInfoFromBytes(out, payloadInfo)
+	if err != nil {
+		t.Fatalf("code segment info: %v", err)
+	}
+	m := &Manifest{RuntimePayload: payloadInfo, CodeSegments: codeSegments}
 	if err := ValidateManifestRuntimePayloadBytes(m, out); err != nil {
 		t.Fatalf("validate runtime payload failed: %v", err)
+	}
+	if err := ValidateManifestCodeSegmentsBytes(m, out); err != nil {
+		t.Fatalf("validate code segment seals failed: %v", err)
+	}
+	corruptCode := append([]byte(nil), out...)
+	corruptCode[0x200] ^= 0xff
+	if err := ValidateManifestCodeSegmentsBytes(m, corruptCode); err == nil {
+		t.Fatalf("validate code segment seals accepted corrupt code segment")
+	}
+	if err := ValidateManifestCodeSegmentsBytes(&Manifest{RuntimePayload: payloadInfo}, out); err == nil {
+		t.Fatalf("validate code segment seals accepted missing manifest seals")
 	}
 	corruptPayload := append([]byte(nil), out...)
 	_, payloadRaw, _, err := findRuntimePayload(corruptPayload)

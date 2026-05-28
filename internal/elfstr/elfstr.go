@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	Schema                   = "nbg-elf-string-crypt-v6"
+	Schema                   = "nbg-elf-string-crypt-v7"
 	minStringLen             = 4
 	defaultMinLen            = 6
 	runtimeStageCount        = 4
@@ -54,6 +54,7 @@ type Manifest struct {
 	Options        ManifestOptions    `json:"options,omitempty"`
 	RuntimeStub    RuntimeStubInfo    `json:"runtime_stub,omitempty"`
 	RuntimePayload RuntimePayloadInfo `json:"runtime_payload,omitempty"`
+	CodeSegments   []CodeSegmentInfo  `json:"code_segments,omitempty"`
 	InputPath      string             `json:"input_path"`
 	OutputPath     string             `json:"output_path"`
 	InputSHA256    string             `json:"input_sha256"`
@@ -96,6 +97,14 @@ type RuntimePayloadInfo struct {
 	DeclaredSize uint64 `json:"declared_size"`
 	FileOffset   uint64 `json:"file_offset,omitempty"`
 	VAddr        uint64 `json:"vaddr,omitempty"`
+}
+
+type CodeSegmentInfo struct {
+	SHA256     string `json:"sha256"`
+	Size       uint64 `json:"size"`
+	FileOffset uint64 `json:"file_offset"`
+	VAddr      uint64 `json:"vaddr"`
+	Flags      uint32 `json:"flags"`
 }
 
 type ProtectionProfile struct {
@@ -318,6 +327,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	codeSegments, err := codeSegmentInfoFromBytes(out, runtimePayload)
+	if err != nil {
+		return nil, err
+	}
 	total := 0
 	for _, e := range manifestEntries {
 		total += e.Length
@@ -397,6 +410,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		},
 		RuntimeStub:    runtimeStubInfo(),
 		RuntimePayload: runtimePayload,
+		CodeSegments:   codeSegments,
 		Protection: ProtectionProfile{
 			Runtime:                "arm64-entrypoint-stub",
 			RandomizedLayout:       true,
@@ -687,6 +701,46 @@ func ValidateManifestRuntimePayload(m *Manifest, outputPath string) error {
 	return ValidateManifestRuntimePayloadBytes(m, outputRaw)
 }
 
+func ValidateManifestCodeSegmentsBytes(m *Manifest, outputRaw []byte) error {
+	if len(m.CodeSegments) == 0 {
+		return fmt.Errorf("code segment seals missing")
+	}
+	got, err := codeSegmentInfoFromBytes(outputRaw, m.RuntimePayload)
+	if err != nil {
+		return err
+	}
+	if len(got) != len(m.CodeSegments) {
+		return fmt.Errorf("code segment count got %d want %d", len(got), len(m.CodeSegments))
+	}
+	for i := range got {
+		want := m.CodeSegments[i]
+		if got[i].FileOffset != want.FileOffset {
+			return fmt.Errorf("code segment %d file_offset got %#x want %#x", i, got[i].FileOffset, want.FileOffset)
+		}
+		if got[i].VAddr != want.VAddr {
+			return fmt.Errorf("code segment %d vaddr got %#x want %#x", i, got[i].VAddr, want.VAddr)
+		}
+		if got[i].Size != want.Size {
+			return fmt.Errorf("code segment %d size got %#x want %#x", i, got[i].Size, want.Size)
+		}
+		if got[i].Flags != want.Flags {
+			return fmt.Errorf("code segment %d flags got %#x want %#x", i, got[i].Flags, want.Flags)
+		}
+		if got[i].SHA256 != want.SHA256 {
+			return fmt.Errorf("code segment %d sha256 got %s want %s", i, got[i].SHA256, want.SHA256)
+		}
+	}
+	return nil
+}
+
+func ValidateManifestCodeSegments(m *Manifest, outputPath string) error {
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	return ValidateManifestCodeSegmentsBytes(m, outputRaw)
+}
+
 func runtimeStubInfo() RuntimeStubInfo {
 	return RuntimeStubInfo{
 		SHA256:        runtimeStubSHA256Hex(),
@@ -713,6 +767,43 @@ func runtimePayloadInfoFromBytes(outputRaw []byte) (RuntimePayloadInfo, error) {
 		FileOffset:   ph.Off,
 		VAddr:        ph.Vaddr,
 	}, nil
+}
+
+func codeSegmentInfoFromBytes(outputRaw []byte, runtimePayload RuntimePayloadInfo) ([]CodeSegmentInfo, error) {
+	if len(outputRaw) < 0x40 {
+		return nil, fmt.Errorf("file too small")
+	}
+	ehdr := readEhdr64(outputRaw)
+	out := make([]CodeSegmentInfo, 0)
+	for i := 0; i < int(ehdr.Phnum); i++ {
+		phOff := ehdr.Phoff + uint64(i)*uint64(ehdr.Phentsize)
+		if phOff+uint64(ehdr.Phentsize) > uint64(len(outputRaw)) {
+			return nil, fmt.Errorf("program header %d outside file", i)
+		}
+		ph := readPhdr64(outputRaw, phOff)
+		if ph.Type != ptLoad || ph.Flags&pfX == 0 || ph.Filesz == 0 {
+			continue
+		}
+		if ph.Off == runtimePayload.FileOffset && ph.Vaddr == runtimePayload.VAddr && ph.Filesz == runtimePayload.Size {
+			continue
+		}
+		if ph.Off+ph.Filesz > uint64(len(outputRaw)) {
+			return nil, fmt.Errorf("code segment %d outside file: off=%#x size=%#x file=%#x", i, ph.Off, ph.Filesz, len(outputRaw))
+		}
+		raw := outputRaw[ph.Off : ph.Off+ph.Filesz]
+		sum := sha256.Sum256(raw)
+		out = append(out, CodeSegmentInfo{
+			SHA256:     hex.EncodeToString(sum[:]),
+			Size:       ph.Filesz,
+			FileOffset: ph.Off,
+			VAddr:      ph.Vaddr,
+			Flags:      ph.Flags,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no executable code LOAD segments found")
+	}
+	return out, nil
 }
 
 func ReadManifest(path string) (*Manifest, error) {

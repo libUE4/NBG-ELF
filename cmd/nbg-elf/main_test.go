@@ -168,6 +168,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["runtime_payload"].Status != "skipped" {
 		t.Fatalf("runtime_payload check = %+v", checks["runtime_payload"])
 	}
+	if checks["code_segments"].Status != "skipped" {
+		t.Fatalf("code_segments check = %+v", checks["code_segments"])
+	}
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
 	}
@@ -271,10 +274,18 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 			{Name: "plaintext_slots", Status: "ok"},
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
 		EntryCount: 4,
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
@@ -309,6 +320,13 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		RuntimePayload: elfstr.RuntimePayloadInfo{
 			SHA256: "payload",
 		},
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
 		Protection: elfstr.ProtectionProfile{
 			RuntimeSelfCheck:       true,
 			RuntimeTable:           "encrypted-per-entry-row-resealed",
@@ -326,7 +344,7 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		EntryCount: 1,
 	}
 	got := auditCapabilities(m)
-	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.CodeSegments || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
 		t.Fatalf("capabilities = %+v", got)
 	}
 	m.Options.KeepSections = true
@@ -366,6 +384,44 @@ func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *test
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without decoy evidence should not be commercial-ready: %+v", summary)
+	}
+}
+
+func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "runtime-state-dispatch",
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             0.3333333333333333,
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("summary without code segment seals should not be commercial-ready: %+v", summary)
 	}
 }
 

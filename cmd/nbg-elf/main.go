@@ -241,6 +241,7 @@ type auditArtifact struct {
 	OutputSHA256         string `json:"output_sha256,omitempty"`
 	RuntimeSHA256        string `json:"runtime_sha256,omitempty"`
 	RuntimePayloadSHA256 string `json:"runtime_payload_sha256,omitempty"`
+	CodeSegmentCount     int    `json:"code_segment_count,omitempty"`
 }
 
 type auditFeatures struct {
@@ -250,6 +251,7 @@ type auditFeatures struct {
 	RuntimeDispatch   bool `json:"runtime_dispatch"`
 	LazyCoverage      bool `json:"lazy_coverage"`
 	RuntimePayload    bool `json:"runtime_payload_sealed"`
+	CodeSegments      bool `json:"code_segments_sealed"`
 	InputSealed       bool `json:"input_sealed"`
 	PlaintextAudit    bool `json:"plaintext_audit"`
 	SectionStripped   bool `json:"section_stripped"`
@@ -290,6 +292,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 			OutputSHA256:         m.OutputSHA256,
 			RuntimeSHA256:        m.RuntimeStub.SHA256,
 			RuntimePayloadSHA256: m.RuntimePayload.SHA256,
+			CodeSegmentCount:     len(m.CodeSegments),
 		},
 		Capabilities: auditCapabilities(m),
 	}
@@ -320,6 +323,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "output_structure", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "skipped", Detail: "output unavailable"})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "code_segments", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "skipped", Detail: "output unavailable"})
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
 			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "skipped", Detail: "output unavailable"})
@@ -342,6 +346,11 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "invalid", Detail: err.Error()})
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "ok", Detail: m.RuntimePayload.SHA256})
+	}
+	if err := elfstr.ValidateManifestCodeSegmentsBytes(m, raw); err != nil {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "code_segments", Status: "invalid", Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "code_segments", Status: "ok", Detail: fmt.Sprintf("%d sealed", len(m.CodeSegments))})
 	}
 	if err := elfstr.ValidateManifestPlaintextSlots(m, inputPath, outputPath); err != nil {
 		status := "invalid"
@@ -395,6 +404,7 @@ func auditCapabilities(m *elfstr.Manifest) auditFeatures {
 		RuntimeDispatch:   elfstr.ManifestRequiresRuntimeDispatchAudit(m),
 		LazyCoverage:      m.Protection.CallsiteLazyCoverage > 0,
 		RuntimePayload:    m.RuntimePayload.SHA256 != "",
+		CodeSegments:      len(m.CodeSegments) > 0,
 		InputSealed:       m.InputSHA256 != "",
 		PlaintextAudit:    m.Protection.PlaintextAudit != "",
 		SectionStripped:   !m.Options.KeepSections,
@@ -479,9 +489,10 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		m.Protection.CallsiteLazySelected > 0 &&
 		m.Protection.CallsiteLazyCoverage > 0 &&
 		m.Protection.DecoyCount > 0 &&
-		m.Protection.RuntimeTableEntries == expectedTableEntries
+		m.Protection.RuntimeTableEntries == expectedTableEntries &&
+		len(m.CodeSegments) > 0
 	if !strongMode {
-		recommendations = append(recommendations, "aggressive preset with patched lazy callsites is required for commercial-ready grade")
+		recommendations = append(recommendations, "aggressive preset with patched lazy callsites and code segment seals is required for commercial-ready grade")
 	}
 	if score < 0 {
 		score = 0
@@ -550,6 +561,9 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	if m.RuntimePayload.SHA256 != "" {
 		fmt.Printf("运行时_payload: 大小=%d declared=%d off=0x%x va=0x%x sha256=%s\n", m.RuntimePayload.Size, m.RuntimePayload.DeclaredSize, m.RuntimePayload.FileOffset, m.RuntimePayload.VAddr, m.RuntimePayload.SHA256)
 	}
+	if len(m.CodeSegments) > 0 {
+		fmt.Printf("代码段封印: %d 个 LOAD 段\n", len(m.CodeSegments))
+	}
 }
 
 func printAuditCheck(check auditCheck) {
@@ -560,6 +574,7 @@ func printAuditCheck(check auditCheck) {
 		"output_structure": "输出结构",
 		"runtime_stub":     "运行时_stub",
 		"runtime_payload":  "运行时_payload",
+		"code_segments":    "代码段封印",
 		"plaintext_slots":  "明文槽位",
 		"runtime_table":    "运行时表",
 		"runtime_dispatch": "运行时分派",
