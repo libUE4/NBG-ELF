@@ -45,6 +45,9 @@ func TestRuntimeStringCryptUsesHardMaskLayer(t *testing.T) {
 	if bytes.Equal(hardened, legacy) {
 		t.Fatalf("hardened encryption matched legacy single-layer stream")
 	}
+	if bytes.Equal(hardened, cryptRuntimeStringHardMaskV1ForTest(plain, va, index, key, posParam, indexParam, saltA, saltB, variant)) {
+		t.Fatalf("hardened encryption matched previous hard-mask stream")
+	}
 	if bytes.Equal(hardened, plain) {
 		t.Fatalf("hardened encryption did not change plaintext")
 	}
@@ -52,6 +55,39 @@ func TestRuntimeStringCryptUsesHardMaskLayer(t *testing.T) {
 	if !bytes.Equal(hardened, plain) {
 		t.Fatalf("hardened encryption failed round trip")
 	}
+}
+
+func cryptRuntimeStringHardMaskV1ForTest(plain []byte, va uint64, index uint32, key, posParam, indexParam, saltA, saltB uint32, variant uint8) []byte {
+	buf := append([]byte(nil), plain...)
+	state := key ^ uint32(va) ^ uint32(va>>32) ^ uint32(len(buf)) ^ (index * indexParam) ^ posParam ^ saltA ^ saltB ^ uint32(variant&0x0f)
+	for pos := range buf {
+		state += posParam
+		state += saltB
+		state ^= uint32(pos)*indexParam + saltA
+		state = mixXorShift32(state)
+		mask := state + uint32(pos)*posParam + uint32(va>>4)
+		if variant&0x01 != 0 {
+			mask ^= state >> 8
+		}
+		if variant&0x02 != 0 {
+			mask ^= saltB
+		}
+		if variant&0x04 != 0 {
+			mask ^= state << 7
+		}
+		if variant&0x08 != 0 {
+			mask ^= state >> 11
+		}
+		mask ^= runtimeStringHardMaskV1ForTest(state, va, uint32(pos), saltA, saltB)
+		buf[pos] ^= byte(mask)
+	}
+	return buf
+}
+
+func runtimeStringHardMaskV1ForTest(state uint32, va uint64, pos, saltA, saltB uint32) uint32 {
+	mask := state ^ (pos*0x27d4eb2d + saltA) ^ uint32(va>>16) ^ saltB ^ ((pos + 1) * 0x165667b1)
+	mask = mixXorShift32(mask)
+	return (mask ^ (mask >> 16)) + (state << 3)
 }
 
 func cryptRuntimeStringLegacyForTest(buf []byte, va uint64, index uint32, key, posParam, indexParam, saltA, saltB uint32, variant uint8) {

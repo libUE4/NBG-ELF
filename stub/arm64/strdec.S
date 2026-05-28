@@ -1053,6 +1053,32 @@ strdec_entry:
     eor w8, w6, w6, lsr #16
     add w6, w8, w28, lsl #3
     eor w5, w5, w6
+    mov w6, w28
+    eor w6, w6, w15
+    ror w8, w17, #23
+    eor w6, w6, w8
+    eor w6, w6, w7
+    lsr x8, x7, #32
+    eor w6, w6, w8
+    mov w8, #0x7c15
+    movk w8, #0x7f4a, lsl #16
+    mul w8, w3, w8
+    add w6, w6, w8
+    add w6, w6, w14
+    eor w6, w6, w6, lsl #13
+    eor w6, w6, w6, lsr #17
+    eor w6, w6, w6, lsl #5
+    mov w8, #0x79b9
+    movk w8, #0x9e37, lsl #16
+    mul w8, w16, w8
+    add w8, w8, w6
+    and w27, w3, #7
+    add w27, w27, #5
+    neg w27, w27
+    ror w8, w8, w27
+    eor w6, w6, w8
+    eor w6, w6, w6, lsr #13
+    eor w5, w5, w6
     eor w4, w4, w5
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1332,6 +1358,32 @@ strdec_lazy_entry:
     eor w17, w16, w16, lsr #16
     add w16, w17, w11, lsl #3
     eor w6, w6, w16
+    mov w16, w11
+    eor w16, w16, w14
+    ror w17, w15, #23
+    eor w16, w16, w17
+    eor w16, w16, w7
+    lsr x17, x7, #32
+    eor w16, w16, w17
+    mov w17, #0x7c15
+    movk w17, #0x7f4a, lsl #16
+    mul w17, w3, w17
+    add w16, w16, w17
+    add w16, w16, w13
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    mov w17, #0x79b9
+    movk w17, #0x9e37, lsl #16
+    mul w17, w9, w17
+    add w17, w17, w16
+    and w18, w3, #7
+    add w18, w18, #5
+    neg w18, w18
+    ror w17, w17, w18
+    eor w16, w16, w17
+    eor w16, w16, w16, lsr #13
+    eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1399,6 +1451,32 @@ strdec_lazy_entry:
     eor w16, w16, w16, lsl #5
     eor w17, w16, w16, lsr #16
     add w16, w17, w11, lsl #3
+    eor w6, w6, w16
+    mov w16, w11
+    eor w16, w16, w14
+    ror w17, w15, #23
+    eor w16, w16, w17
+    eor w16, w16, w7
+    lsr x17, x7, #32
+    eor w16, w16, w17
+    mov w17, #0x7c15
+    movk w17, #0x7f4a, lsl #16
+    mul w17, w3, w17
+    add w16, w16, w17
+    add w16, w16, w13
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    mov w17, #0x79b9
+    movk w17, #0x9e37, lsl #16
+    mul w17, w9, w17
+    add w17, w17, w16
+    and w18, w3, #7
+    add w18, w18, #5
+    neg w18, w18
+    ror w17, w17, w18
+    eor w16, w16, w17
+    eor w16, w16, w16, lsr #13
     eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]
