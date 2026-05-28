@@ -168,6 +168,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["runtime_payload"].Status != "skipped" {
 		t.Fatalf("runtime_payload check = %+v", checks["runtime_payload"])
 	}
+	if checks["load_metadata"].Status != "skipped" {
+		t.Fatalf("load_metadata check = %+v", checks["load_metadata"])
+	}
 	if checks["code_segments"].Status != "skipped" {
 		t.Fatalf("code_segments check = %+v", checks["code_segments"])
 	}
@@ -269,6 +272,7 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 			{Name: "runtime_stub", Status: "ok"},
 			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},
@@ -279,6 +283,15 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 	}
 	m := &elfstr.Manifest{
 		EntryCount: 4,
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+			Entry:             0x401000,
+			ProgramHeaderOff:  0x40,
+			ProgramHeaderSize: 0x1c0,
+			ProgramHeaderEnt:  0x38,
+			ProgramHeaderNum:  8,
+		},
 		CodeSegments: []elfstr.CodeSegmentInfo{{
 			SHA256:     "code",
 			Size:       4096,
@@ -320,6 +333,10 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		RuntimePayload: elfstr.RuntimePayloadInfo{
 			SHA256: "payload",
 		},
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+		},
 		CodeSegments: []elfstr.CodeSegmentInfo{{
 			SHA256:     "code",
 			Size:       4096,
@@ -344,7 +361,7 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		EntryCount: 1,
 	}
 	got := auditCapabilities(m)
-	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.CodeSegments || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.LoadMetadata || !got.CodeSegments || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
 		t.Fatalf("capabilities = %+v", got)
 	}
 	m.Options.KeepSections = true
@@ -360,15 +377,28 @@ func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *test
 			{Name: "runtime_stub", Status: "ok"},
 			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
 		EntryCount: 4,
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+		},
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
@@ -394,6 +424,7 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 			{Name: "runtime_stub", Status: "ok"},
 			{Name: "input_sha256", Status: "ok"},
 			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
 			{Name: "output_sha256", Status: "ok"},
 			{Name: "output_structure", Status: "ok"},
 			{Name: "plaintext_slots", Status: "ok"},
@@ -404,6 +435,10 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 	}
 	m := &elfstr.Manifest{
 		EntryCount: 4,
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+		},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
@@ -422,6 +457,52 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without code segment seals should not be commercial-ready: %+v", summary)
+	}
+}
+
+func TestBuildAuditSummaryRequiresLoadMetadataSealsForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "runtime-state-dispatch",
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             0.3333333333333333,
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("summary without load metadata seals should not be commercial-ready: %+v", summary)
 	}
 }
 

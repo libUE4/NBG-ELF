@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	Schema                   = "nbg-elf-string-crypt-v7"
+	Schema                   = "nbg-elf-string-crypt-v8"
 	minStringLen             = 4
 	defaultMinLen            = 6
 	runtimeStageCount        = 4
@@ -54,6 +54,7 @@ type Manifest struct {
 	Options        ManifestOptions    `json:"options,omitempty"`
 	RuntimeStub    RuntimeStubInfo    `json:"runtime_stub,omitempty"`
 	RuntimePayload RuntimePayloadInfo `json:"runtime_payload,omitempty"`
+	LoadMetadata   LoadMetadataInfo   `json:"load_metadata,omitempty"`
 	CodeSegments   []CodeSegmentInfo  `json:"code_segments,omitempty"`
 	InputPath      string             `json:"input_path"`
 	OutputPath     string             `json:"output_path"`
@@ -97,6 +98,16 @@ type RuntimePayloadInfo struct {
 	DeclaredSize uint64 `json:"declared_size"`
 	FileOffset   uint64 `json:"file_offset,omitempty"`
 	VAddr        uint64 `json:"vaddr,omitempty"`
+}
+
+type LoadMetadataInfo struct {
+	ELFHeaderSHA256   string `json:"elf_header_sha256"`
+	ProgramHeaderHash string `json:"program_header_sha256"`
+	Entry             uint64 `json:"entry"`
+	ProgramHeaderOff  uint64 `json:"program_header_off"`
+	ProgramHeaderSize uint64 `json:"program_header_size"`
+	ProgramHeaderEnt  uint16 `json:"program_header_ent"`
+	ProgramHeaderNum  uint16 `json:"program_header_num"`
 }
 
 type CodeSegmentInfo struct {
@@ -327,6 +338,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	loadMetadata, err := loadMetadataInfoFromBytes(out)
+	if err != nil {
+		return nil, err
+	}
 	codeSegments, err := codeSegmentInfoFromBytes(out, runtimePayload)
 	if err != nil {
 		return nil, err
@@ -410,6 +425,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		},
 		RuntimeStub:    runtimeStubInfo(),
 		RuntimePayload: runtimePayload,
+		LoadMetadata:   loadMetadata,
 		CodeSegments:   codeSegments,
 		Protection: ProtectionProfile{
 			Runtime:                "arm64-entrypoint-stub",
@@ -701,6 +717,46 @@ func ValidateManifestRuntimePayload(m *Manifest, outputPath string) error {
 	return ValidateManifestRuntimePayloadBytes(m, outputRaw)
 }
 
+func ValidateManifestLoadMetadataBytes(m *Manifest, outputRaw []byte) error {
+	if m.LoadMetadata.ELFHeaderSHA256 == "" || m.LoadMetadata.ProgramHeaderHash == "" {
+		return fmt.Errorf("load metadata seal missing")
+	}
+	got, err := loadMetadataInfoFromBytes(outputRaw)
+	if err != nil {
+		return err
+	}
+	if got.Entry != m.LoadMetadata.Entry {
+		return fmt.Errorf("entry got %#x want %#x", got.Entry, m.LoadMetadata.Entry)
+	}
+	if got.ProgramHeaderOff != m.LoadMetadata.ProgramHeaderOff {
+		return fmt.Errorf("program header off got %#x want %#x", got.ProgramHeaderOff, m.LoadMetadata.ProgramHeaderOff)
+	}
+	if got.ProgramHeaderSize != m.LoadMetadata.ProgramHeaderSize {
+		return fmt.Errorf("program header size got %#x want %#x", got.ProgramHeaderSize, m.LoadMetadata.ProgramHeaderSize)
+	}
+	if got.ProgramHeaderEnt != m.LoadMetadata.ProgramHeaderEnt {
+		return fmt.Errorf("program header entsize got %#x want %#x", got.ProgramHeaderEnt, m.LoadMetadata.ProgramHeaderEnt)
+	}
+	if got.ProgramHeaderNum != m.LoadMetadata.ProgramHeaderNum {
+		return fmt.Errorf("program header count got %#x want %#x", got.ProgramHeaderNum, m.LoadMetadata.ProgramHeaderNum)
+	}
+	if got.ELFHeaderSHA256 != m.LoadMetadata.ELFHeaderSHA256 {
+		return fmt.Errorf("ELF header sha256 got %s want %s", got.ELFHeaderSHA256, m.LoadMetadata.ELFHeaderSHA256)
+	}
+	if got.ProgramHeaderHash != m.LoadMetadata.ProgramHeaderHash {
+		return fmt.Errorf("program header sha256 got %s want %s", got.ProgramHeaderHash, m.LoadMetadata.ProgramHeaderHash)
+	}
+	return nil
+}
+
+func ValidateManifestLoadMetadata(m *Manifest, outputPath string) error {
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	return ValidateManifestLoadMetadataBytes(m, outputRaw)
+}
+
 func ValidateManifestCodeSegmentsBytes(m *Manifest, outputRaw []byte) error {
 	if len(m.CodeSegments) == 0 {
 		return fmt.Errorf("code segment seals missing")
@@ -766,6 +822,39 @@ func runtimePayloadInfoFromBytes(outputRaw []byte) (RuntimePayloadInfo, error) {
 		DeclaredSize: declaredLen,
 		FileOffset:   ph.Off,
 		VAddr:        ph.Vaddr,
+	}, nil
+}
+
+func loadMetadataInfoFromBytes(outputRaw []byte) (LoadMetadataInfo, error) {
+	if len(outputRaw) < 0x40 || outputRaw[0] != 0x7f || outputRaw[1] != 'E' || outputRaw[2] != 'L' || outputRaw[3] != 'F' || outputRaw[4] != 2 {
+		return LoadMetadataInfo{}, fmt.Errorf("output is not an ELF64 file")
+	}
+	ehdr := readEhdr64(outputRaw)
+	if ehdr.Phnum == 0 {
+		return LoadMetadataInfo{}, fmt.Errorf("program header table missing")
+	}
+	if ehdr.Phentsize == 0 {
+		return LoadMetadataInfo{}, fmt.Errorf("program header entry size is zero")
+	}
+	phSize := uint64(ehdr.Phentsize) * uint64(ehdr.Phnum)
+	if uint64(ehdr.Phentsize) != 0 && phSize/uint64(ehdr.Phentsize) != uint64(ehdr.Phnum) {
+		return LoadMetadataInfo{}, fmt.Errorf("program header size overflow: entsize=%#x count=%#x", ehdr.Phentsize, ehdr.Phnum)
+	}
+	if ehdr.Phoff > uint64(len(outputRaw)) || phSize > uint64(len(outputRaw))-ehdr.Phoff {
+		return LoadMetadataInfo{}, fmt.Errorf("program header table outside file: off=%#x size=%#x file=%#x", ehdr.Phoff, phSize, len(outputRaw))
+	}
+	ehdrRaw := outputRaw[:0x40]
+	phRaw := outputRaw[ehdr.Phoff : ehdr.Phoff+phSize]
+	ehdrSum := sha256.Sum256(ehdrRaw)
+	phSum := sha256.Sum256(phRaw)
+	return LoadMetadataInfo{
+		ELFHeaderSHA256:   hex.EncodeToString(ehdrSum[:]),
+		ProgramHeaderHash: hex.EncodeToString(phSum[:]),
+		Entry:             ehdr.Entry,
+		ProgramHeaderOff:  ehdr.Phoff,
+		ProgramHeaderSize: phSize,
+		ProgramHeaderEnt:  ehdr.Phentsize,
+		ProgramHeaderNum:  ehdr.Phnum,
 	}, nil
 }
 

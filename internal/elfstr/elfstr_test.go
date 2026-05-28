@@ -1201,6 +1201,15 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 			FileOffset:   0x5000,
 			VAddr:        0x7000,
 		},
+		LoadMetadata: LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr123",
+			ProgramHeaderHash: "phdr123",
+			Entry:             0x7010,
+			ProgramHeaderOff:  0x40,
+			ProgramHeaderSize: 0x1c0,
+			ProgramHeaderEnt:  0x38,
+			ProgramHeaderNum:  8,
+		},
 		CodeSegments: []CodeSegmentInfo{{
 			SHA256:     "code123",
 			Size:       0x3000,
@@ -1225,6 +1234,9 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["runtime_payload"]; !ok {
 		t.Fatalf("manifest json missing runtime_payload: %s", raw)
+	}
+	if _, ok := decoded["load_metadata"]; !ok {
+		t.Fatalf("manifest json missing load_metadata: %s", raw)
 	}
 	if _, ok := decoded["code_segments"]; !ok {
 		t.Fatalf("manifest json missing code_segments: %s", raw)
@@ -1444,13 +1456,37 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime payload info: %v", err)
 	}
+	loadMetadata, err := loadMetadataInfoFromBytes(out)
+	if err != nil {
+		t.Fatalf("load metadata info: %v", err)
+	}
 	codeSegments, err := codeSegmentInfoFromBytes(out, payloadInfo)
 	if err != nil {
 		t.Fatalf("code segment info: %v", err)
 	}
-	m := &Manifest{RuntimePayload: payloadInfo, CodeSegments: codeSegments}
+	m := &Manifest{RuntimePayload: payloadInfo, LoadMetadata: loadMetadata, CodeSegments: codeSegments}
 	if err := ValidateManifestRuntimePayloadBytes(m, out); err != nil {
 		t.Fatalf("validate runtime payload failed: %v", err)
+	}
+	if err := ValidateManifestLoadMetadataBytes(m, out); err != nil {
+		t.Fatalf("validate load metadata failed: %v", err)
+	}
+	corruptEntry := append([]byte(nil), out...)
+	binary.LittleEndian.PutUint64(corruptEntry[0x18:], 0x1234)
+	if err := ValidateManifestLoadMetadataBytes(m, corruptEntry); err == nil {
+		t.Fatalf("validate load metadata accepted corrupt entrypoint")
+	}
+	corruptPhdr := append([]byte(nil), out...)
+	ehdr := readEhdr64(corruptPhdr)
+	if ehdr.Phnum == 0 {
+		t.Fatalf("test fixture has no program headers")
+	}
+	binary.LittleEndian.PutUint32(corruptPhdr[ehdr.Phoff+4:], pfR)
+	if err := ValidateManifestLoadMetadataBytes(m, corruptPhdr); err == nil {
+		t.Fatalf("validate load metadata accepted corrupt program header")
+	}
+	if err := ValidateManifestLoadMetadataBytes(&Manifest{}, out); err == nil {
+		t.Fatalf("validate load metadata accepted missing manifest seal")
 	}
 	if err := ValidateManifestCodeSegmentsBytes(m, out); err != nil {
 		t.Fatalf("validate code segment seals failed: %v", err)

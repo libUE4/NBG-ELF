@@ -3,6 +3,7 @@ package elfstr
 import "encoding/binary"
 
 type elf64Ehdr struct {
+	Entry     uint64
 	Phoff     uint64
 	Shoff     uint64
 	Phentsize uint16
@@ -25,6 +26,7 @@ type elf64Phdr struct {
 
 func readEhdr64(data []byte) elf64Ehdr {
 	return elf64Ehdr{
+		Entry:     binary.LittleEndian.Uint64(data[0x18:]),
 		Phoff:     binary.LittleEndian.Uint64(data[0x20:]),
 		Shoff:     binary.LittleEndian.Uint64(data[0x28:]),
 		Phentsize: binary.LittleEndian.Uint16(data[0x36:]),
