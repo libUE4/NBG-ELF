@@ -401,6 +401,12 @@ func TestSafeScanExcludesDataRelRo(t *testing.T) {
 	if wantedSection(".data.rel.ro", false, true) {
 		t.Fatalf("safe-scan should exclude .data.rel.ro")
 	}
+	if wantedSection(".data.rel.ro", false, false) {
+		t.Fatalf("normal mode should require -data for .data.rel.ro")
+	}
+	if !wantedSection(".data.rel.ro", true, false) {
+		t.Fatalf("normal -data mode should include .data.rel.ro")
+	}
 	if wantedSection(".data", false, true) {
 		t.Fatalf("safe-scan should exclude .data")
 	}
@@ -738,7 +744,10 @@ func TestLazyDispatchTableLayoutConstants(t *testing.T) {
 	if got := out[base+40]; got != de.Variant {
 		t.Fatalf("Variant got %#x want %#x", got, de.Variant)
 	}
-	if pad := out[base+41 : base+48]; !bytes.Equal(pad, make([]byte, 7)) {
+	if got, want := binary.LittleEndian.Uint32(out[base+41:]), lazyDispatchTag(de); got != want {
+		t.Fatalf("lazy dispatch tag got %#x want %#x", got, want)
+	}
+	if pad := out[base+45 : base+48]; !bytes.Equal(pad, make([]byte, 3)) {
 		t.Fatalf("lazy dispatch padding not zero: %x", pad)
 	}
 	if got := binary.LittleEndian.Uint64(out[base+48:]); got != de.OrigTarget {
@@ -1213,8 +1222,14 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 		t.Fatalf("accepted lazy dispatch entry with zero length")
 	}
 
+	corruptTag := append([]byte(nil), out...)
+	corruptTag[base+41] ^= 0xff
+	if err := validateInjectedOutputLazyDispatch(corruptTag, 1); err == nil {
+		t.Fatalf("accepted lazy dispatch entry with corrupt tag")
+	}
+
 	corruptPad := append([]byte(nil), out...)
-	corruptPad[base+41] = 0xff
+	corruptPad[base+45] = 0xff
 	if err := validateInjectedOutputLazyDispatch(corruptPad, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
 	}

@@ -44,6 +44,7 @@ strdec_entry:
     mov x3, #0
     mov x8, #117
     svc #0
+    mov x27, x0
 
     // Best-effort anti-Frida probe: decode "/proc/self/maps" only on the
     // stack, read a few small maps windows, and trap if common Frida/Gum/Gadget
@@ -315,10 +316,11 @@ strdec_entry:
     cmp x0, #0
     b.le .Lstatus_close
     mov x4, x0
+    add x4, x1, x4
     mov x2, #0
 .Lstatus_scan_loop:
     add x7, x2, #9
-    cmp x7, x4
+    cmp x7, x0
     b.hs .Lstatus_close
     add x3, x1, x2
     ldrb w5, [x3]
@@ -353,8 +355,8 @@ strdec_entry:
     b.ne .Lstatus_next
     add x3, x3, #10
 .Lstatus_skip_ws:
-    cmp x3, x1
-    b.lo .Lstatus_close
+    cmp x3, x4
+    b.hs .Lstatus_close
     ldrb w5, [x3]
     cmp w5, #0x20
     b.eq .Lstatus_ws_advance
@@ -382,6 +384,8 @@ strdec_entry:
 .Lstatus_done:
     b .Lstatus_after_trap
 .Lstatus_trap:
+    cmp x27, #0
+    b.ne .Lstatus_after_trap
     brk #0x7d1
 .Lstatus_after_trap:
 
@@ -1212,7 +1216,8 @@ strdec_lazy_entry:
     
 .Llazy_found:
     // x5 = dispatch entry base; load all fields
-    // Entry: text_va(8) string_va(8) len(4) key_state(4) pos_param(4) idx_param(4) saltA(4) saltB(4) variant(1) pad(7) orig_target(8) = 56
+    // Entry: text_va(8) string_va(8) len(4) key_state(4) pos_param(4) idx_param(4) saltA(4) saltB(4) variant(1) tag(4) pad(3) orig_target(8) = 56
+    ldr x16, [x5]             // text_va
     ldr x7,  [x5, #8]         // string_va (link-time)
     ldr w8,  [x5, #16]        // len
     ldr w11, [x5, #20]        // key_state
@@ -1222,6 +1227,45 @@ strdec_lazy_entry:
     ldr w15, [x5, #36]        // saltB
     ldrb w9, [x5, #40]        // variant
     ldr x10, [x5, #48]        // orig_target
+    ldur w17, [x5, #41]       // tag
+    lsr x6, x16, #32
+    eor w18, w16, w6
+    eor w18, w18, w7
+    lsr x6, x7, #32
+    eor w18, w18, w6
+    eor w18, w18, w8
+    eor w18, w18, w11
+    eor w18, w18, w12
+    ror w6, w13, #29
+    eor w18, w18, w6
+    eor w18, w18, w14
+    ror w6, w15, #25
+    eor w18, w18, w6
+    mov w6, #0x79b9
+    movk w6, #0x9e37, lsl #16
+    mul w6, w9, w6
+    eor w18, w18, w6
+    eor w18, w18, w10
+    lsr x6, x10, #32
+    eor w18, w18, w6
+    mov w6, #0xe667
+    movk w6, #0x6a09, lsl #16
+    eor w18, w18, w6
+    eor w18, w18, w18, lsl #13
+    eor w18, w18, w18, lsr #17
+    eor w18, w18, w18, lsl #5
+    mov w6, #0x9f3b
+    movk w6, #0x045d, lsl #16
+    mul w6, w8, w6
+    add w6, w6, w12
+    add w18, w18, w6
+    eor w18, w18, w18, lsl #13
+    eor w18, w18, w18, lsr #17
+    eor w18, w18, w18, lsl #5
+    cmp w18, w17
+    b.eq .Llazy_tag_ok
+    brk #0x7b1
+.Llazy_tag_ok:
     add x10, x10, x19         // runtime orig_target
     
     ldr x0, [sp, #160]        // runtime string VA

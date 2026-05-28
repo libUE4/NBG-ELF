@@ -199,6 +199,7 @@ func PlanProtectionBytes(raw []byte, opts Options) (*ProtectionReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	callsiteCandidates = filterLazyCallsiteCandidates(raw, runtimeEntries, callsiteCandidates)
 	mode, selectedCandidates, err := selectCallsiteProtection(opts, callsiteCandidates)
 	if err != nil {
 		return nil, err

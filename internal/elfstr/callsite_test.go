@@ -135,3 +135,25 @@ func TestDiscoverAArch64CallsitesInTextADRAndFilters(t *testing.T) {
 		t.Fatalf("unexpected ADR candidate: %#v", got[1])
 	}
 }
+
+func TestFilterLazyCallsiteCandidatesKeepsOnlyConservativeStrings(t *testing.T) {
+	raw := make([]byte, 0x80)
+	safeText := []byte("频道验证成功！欢迎使用牛逼哥！")
+	pathText := []byte("/system/lib64/libc.so")
+	copy(raw[0x10:], safeText)
+	copy(raw[0x40:], pathText)
+	entries := []Entry{
+		{Section: ".rodata", Offset: 0x10, VAddr: 0x1010, Length: len(safeText)},
+		{Section: ".rodata", Offset: 0x40, VAddr: 0x1040, Length: len(pathText)},
+		{Section: ".data.rel.ro", Offset: 0x10, VAddr: 0x2010, Length: len(safeText)},
+	}
+	candidates := []CallsiteCandidate{
+		{TextVAddr: 0x3000, StringVAddr: 0x1010},
+		{TextVAddr: 0x3004, StringVAddr: 0x1040},
+		{TextVAddr: 0x3008, StringVAddr: 0x2010},
+	}
+	got := filterLazyCallsiteCandidates(raw, entries, candidates)
+	if len(got) != 1 || got[0].StringVAddr != 0x1010 {
+		t.Fatalf("filtered candidates = %#v", got)
+	}
+}

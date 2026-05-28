@@ -194,6 +194,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	callsiteCandidates = filterLazyCallsiteCandidates(raw, runtimeEntries, callsiteCandidates)
 	callsiteMode, selectedLazyCandidates, err := selectCallsiteProtection(opts, callsiteCandidates)
 	if err != nil {
 		return nil, err
@@ -682,7 +683,7 @@ func wantedSection(name string, includeData bool, safeScan bool) bool {
 	case ".rodata":
 		return true
 	case ".data.rel.ro":
-		return !safeScan
+		return includeData && !safeScan
 	case ".data":
 		return includeData && !safeScan
 	default:

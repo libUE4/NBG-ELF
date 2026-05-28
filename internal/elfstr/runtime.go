@@ -13,32 +13,32 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0xfc4
-	stubHoneypotEntryOff    = 0x1240
-	stubAnchorOff           = 0x12e0
-	stubStaticVAOff         = 0x12e8
-	stubOrigEntryOff        = 0x12f0
-	stubPageVAOff           = 0x12f8
-	stubPageLenOff          = 0x1300
-	stubPayloadLenOff       = 0x1308
-	stubEntryCountOff       = 0x1310
-	stubGuardSeedOff        = 0x1314
-	stubTableSeedOff        = 0x1318
-	stubKeySeedOff          = 0x131c
-	stubParamTableAOff      = 0x1320
-	stubParamTableBOff      = 0x1324
-	stubParamKeyIndexOff    = 0x1328
-	stubParamStringPosOff   = 0x132c
-	stubParamStringIndexOff = 0x1330
-	stubGuardHashOff        = 0x1334
-	stubOrigEntryKeyOff     = 0x1338
-	stubTableOff            = 0x1340
+	stubLazyEntryOff        = 0xfd4
+	stubHoneypotEntryOff    = 0x12ec
+	stubAnchorOff           = 0x1388
+	stubStaticVAOff         = 0x1390
+	stubOrigEntryOff        = 0x1398
+	stubPageVAOff           = 0x13a0
+	stubPageLenOff          = 0x13a8
+	stubPayloadLenOff       = 0x13b0
+	stubEntryCountOff       = 0x13b8
+	stubGuardSeedOff        = 0x13bc
+	stubTableSeedOff        = 0x13c0
+	stubKeySeedOff          = 0x13c4
+	stubParamTableAOff      = 0x13c8
+	stubParamTableBOff      = 0x13cc
+	stubParamKeyIndexOff    = 0x13d0
+	stubParamStringPosOff   = 0x13d4
+	stubParamStringIndexOff = 0x13d8
+	stubGuardHashOff        = 0x13dc
+	stubOrigEntryKeyOff     = 0x13e0
+	stubTableOff            = 0x13e8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1358
-	stubLazyTableOff        = 0x1360
+	stubLazyCountOff        = 0x1400
+	stubLazyTableOff        = 0x1408
 	stubLazyEntSize         = 56
-	stubRuntimeTableADROff  = 0xb88
-	stubDataEndOff          = 0x13b0
+	stubRuntimeTableADROff  = 0xb98
+	stubDataEndOff          = 0x1458
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -363,6 +363,13 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 		textVA := binary.LittleEndian.Uint64(payloadRaw[off:])
 		stringVA := binary.LittleEndian.Uint64(payloadRaw[off+8:])
 		length := binary.LittleEndian.Uint32(payloadRaw[off+16:])
+		keyState := binary.LittleEndian.Uint32(payloadRaw[off+20:])
+		posParam := binary.LittleEndian.Uint32(payloadRaw[off+24:])
+		idxParam := binary.LittleEndian.Uint32(payloadRaw[off+28:])
+		saltA := binary.LittleEndian.Uint32(payloadRaw[off+32:])
+		saltB := binary.LittleEndian.Uint32(payloadRaw[off+36:])
+		variant := payloadRaw[off+40]
+		tag := binary.LittleEndian.Uint32(payloadRaw[off+41:])
 		origTarget := binary.LittleEndian.Uint64(payloadRaw[off+48:])
 		if textVA == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty text VA", i)
@@ -376,17 +383,27 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 		if origTarget == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty original target", i)
 		}
-		for _, b := range payloadRaw[off+41 : off+48] {
+		de := LazyDispatchEntry{
+			TextVA:     textVA,
+			StringVA:   stringVA,
+			Length:     length,
+			KeyState:   keyState,
+			PosParam:   posParam,
+			IdxParam:   idxParam,
+			SaltA:      saltA,
+			SaltB:      saltB,
+			Variant:    variant,
+			OrigTarget: origTarget,
+		}
+		if want := lazyDispatchTag(de); tag != want {
+			return nil, fmt.Errorf("lazy dispatch entry %d tag mismatch: got %#x want %#x", i, tag, want)
+		}
+		for _, b := range payloadRaw[off+45 : off+48] {
 			if b != 0 {
 				return nil, fmt.Errorf("lazy dispatch entry %d padding is not zero", i)
 			}
 		}
-		entries = append(entries, LazyDispatchEntry{
-			TextVA:     textVA,
-			StringVA:   stringVA,
-			Length:     length,
-			OrigTarget: origTarget,
-		})
+		entries = append(entries, de)
 	}
 	return entries, nil
 }
@@ -576,7 +593,10 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 		binary.LittleEndian.PutUint32(payload[off+32:], de.SaltA)
 		binary.LittleEndian.PutUint32(payload[off+36:], de.SaltB)
 		payload[off+40] = de.Variant
-		binary.LittleEndian.PutUint64(payload[off+41:], 0) // zero pad[41..48]
+		binary.LittleEndian.PutUint32(payload[off+41:], lazyDispatchTag(de))
+		for j := off + 45; j < off+48; j++ {
+			payload[j] = 0
+		}
 		binary.LittleEndian.PutUint64(payload[off+48:], de.OrigTarget)
 	}
 	binary.LittleEndian.PutUint64(payload[stubPayloadLenOff:], uint64(len(payload)))
@@ -906,6 +926,19 @@ func lazyRuntimeEntryHashes(entries []Entry, lazyStringVAs map[uint64]struct{}) 
 		}
 	}
 	return out
+}
+
+func lazyDispatchTag(de LazyDispatchEntry) uint32 {
+	tag := uint32(de.TextVA) ^ uint32(de.TextVA>>32) ^
+		uint32(de.StringVA) ^ uint32(de.StringVA>>32) ^
+		de.Length ^ de.KeyState ^ de.PosParam ^ bitsRotateLeft32(de.IdxParam, 3) ^
+		de.SaltA ^ bitsRotateLeft32(de.SaltB, 7) ^
+		(uint32(de.Variant&0x0f) * 0x9e3779b9) ^
+		uint32(de.OrigTarget) ^ uint32(de.OrigTarget>>32) ^ 0x6a09e667
+	tag = mixXorShift32(tag)
+	tag += de.Length*0x045d9f3b + de.PosParam
+	tag = mixXorShift32(tag)
+	return tag
 }
 
 func makeDecoyEntry(baseVA uint64) (Entry, error) {

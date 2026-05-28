@@ -52,6 +52,28 @@ func discoverAArch64Callsites(raw []byte, entries []Entry) ([]CallsiteCandidate,
 	return out, nil
 }
 
+func filterLazyCallsiteCandidates(raw []byte, entries []Entry, candidates []CallsiteCandidate) []CallsiteCandidate {
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]CallsiteCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		e, ok := findRuntimeEntryForVA(entries, c.StringVAddr)
+		if !ok || e.Section != ".rodata" || e.Length <= 0 {
+			continue
+		}
+		end := e.Offset + uint64(e.Length)
+		if end < e.Offset || end > uint64(len(raw)) {
+			continue
+		}
+		if !isSafeStringCandidate(raw[e.Offset:end], safeScanMinLen) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func discoverAArch64CallsitesInText(text []byte, textOff, textVA uint64, ranges []entryRange) []CallsiteCandidate {
 	if len(text) < 8 || len(ranges) == 0 {
 		return nil
