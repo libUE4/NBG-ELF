@@ -1217,6 +1217,11 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 			VAddr:      0x400000,
 			Flags:      pfR | pfX,
 		}},
+		ProtectedSlots: ProtectedSlotsInfo{
+			SHA256: "slots123",
+			Count:  7,
+			Size:   0x120,
+		},
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -1240,6 +1245,9 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["code_segments"]; !ok {
 		t.Fatalf("manifest json missing code_segments: %s", raw)
+	}
+	if _, ok := decoded["protected_slots"]; !ok {
+		t.Fatalf("manifest json missing protected_slots: %s", raw)
 	}
 	if _, ok := decoded["config"]; !ok {
 		t.Fatalf("manifest json missing config: %s", raw)
@@ -1464,7 +1472,11 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("code segment info: %v", err)
 	}
-	m := &Manifest{RuntimePayload: payloadInfo, LoadMetadata: loadMetadata, CodeSegments: codeSegments}
+	protectedSlots, err := protectedSlotsInfoFromEntries(out, []Entry{{Section: ".rodata", Offset: 0x200, VAddr: 0x200, Length: 8, Key: 0x12345678}})
+	if err != nil {
+		t.Fatalf("protected slots info: %v", err)
+	}
+	m := &Manifest{RuntimePayload: payloadInfo, LoadMetadata: loadMetadata, CodeSegments: codeSegments, ProtectedSlots: protectedSlots, EntryCount: 1}
 	if err := ValidateManifestRuntimePayloadBytes(m, out); err != nil {
 		t.Fatalf("validate runtime payload failed: %v", err)
 	}
@@ -1498,6 +1510,16 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	}
 	if err := ValidateManifestCodeSegmentsBytes(&Manifest{RuntimePayload: payloadInfo}, out); err == nil {
 		t.Fatalf("validate code segment seals accepted missing manifest seals")
+	}
+	if err := ValidateManifestProtectedSlots(m, "", ""); err == nil {
+		t.Fatalf("validate protected slots accepted missing paths")
+	}
+	corruptSlot := append([]byte(nil), out...)
+	corruptSlot[0x200] ^= 0xff
+	if got, err := protectedSlotsInfoFromEntries(corruptSlot, []Entry{{Section: ".rodata", Offset: 0x200, VAddr: 0x200, Length: 8}}); err != nil {
+		t.Fatalf("protected slots info for corrupt slot: %v", err)
+	} else if got.SHA256 == protectedSlots.SHA256 {
+		t.Fatalf("protected slot seal did not change after slot tamper")
 	}
 	corruptPayload := append([]byte(nil), out...)
 	_, payloadRaw, _, err := findRuntimePayload(corruptPayload)

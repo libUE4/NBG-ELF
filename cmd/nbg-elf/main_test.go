@@ -174,6 +174,9 @@ func TestBuildManifestAuditReportsMissingOutputAsStructuredChecks(t *testing.T) 
 	if checks["code_segments"].Status != "skipped" {
 		t.Fatalf("code_segments check = %+v", checks["code_segments"])
 	}
+	if checks["protected_slots"].Status != "skipped" {
+		t.Fatalf("protected_slots check = %+v", checks["protected_slots"])
+	}
 	if checks["runtime_dispatch"].Status != "skipped" {
 		t.Fatalf("runtime_dispatch check = %+v", checks["runtime_dispatch"])
 	}
@@ -279,6 +282,7 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
 			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
@@ -299,6 +303,11 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 			VAddr:      0x400000,
 			Flags:      5,
 		}},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  4,
+			Size:   128,
+		},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
@@ -344,6 +353,11 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 			VAddr:      0x400000,
 			Flags:      5,
 		}},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  1,
+			Size:   32,
+		},
 		Protection: elfstr.ProtectionProfile{
 			RuntimeSelfCheck:       true,
 			RuntimeTable:           "encrypted-per-entry-row-resealed",
@@ -361,7 +375,7 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		EntryCount: 1,
 	}
 	got := auditCapabilities(m)
-	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.LoadMetadata || !got.CodeSegments || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.LoadMetadata || !got.CodeSegments || !got.ProtectedSlots || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
 		t.Fatalf("capabilities = %+v", got)
 	}
 	m.Options.KeepSections = true
@@ -384,6 +398,7 @@ func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *test
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
 			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
@@ -399,6 +414,11 @@ func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *test
 			VAddr:      0x400000,
 			Flags:      5,
 		}},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  4,
+			Size:   128,
+		},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
 		},
@@ -431,6 +451,7 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
 			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
@@ -438,6 +459,11 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 		LoadMetadata: elfstr.LoadMetadataInfo{
 			ELFHeaderSHA256:   "ehdr",
 			ProgramHeaderHash: "phdr",
+		},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  4,
+			Size:   128,
 		},
 		Report: elfstr.ProtectionReport{
 			Preset: elfstr.PresetAggressive,
@@ -474,10 +500,67 @@ func TestBuildAuditSummaryRequiresLoadMetadataSealsForCommercialReady(t *testing
 			{Name: "runtime_table", Status: "ok"},
 			{Name: "runtime_dispatch", Status: "ok"},
 			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
 		},
 	}
 	m := &elfstr.Manifest{
 		EntryCount: 4,
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  4,
+			Size:   128,
+		},
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "runtime-state-dispatch",
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             0.3333333333333333,
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("summary without load metadata seals should not be commercial-ready: %+v", summary)
+	}
+}
+
+func TestBuildAuditSummaryRequiresProtectedSlotSealsForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+		},
 		CodeSegments: []elfstr.CodeSegmentInfo{{
 			SHA256:     "code",
 			Size:       4096,
@@ -502,7 +585,7 @@ func TestBuildAuditSummaryRequiresLoadMetadataSealsForCommercialReady(t *testing
 	}
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
-		t.Fatalf("summary without load metadata seals should not be commercial-ready: %+v", summary)
+		t.Fatalf("summary without protected slot seals should not be commercial-ready: %+v", summary)
 	}
 }
 

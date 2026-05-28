@@ -243,6 +243,8 @@ type auditArtifact struct {
 	RuntimePayloadSHA256 string `json:"runtime_payload_sha256,omitempty"`
 	LoadMetadataSHA256   string `json:"load_metadata_sha256,omitempty"`
 	CodeSegmentCount     int    `json:"code_segment_count,omitempty"`
+	ProtectedSlotSHA256  string `json:"protected_slot_sha256,omitempty"`
+	ProtectedSlotCount   int    `json:"protected_slot_count,omitempty"`
 }
 
 type auditFeatures struct {
@@ -254,6 +256,7 @@ type auditFeatures struct {
 	RuntimePayload    bool `json:"runtime_payload_sealed"`
 	LoadMetadata      bool `json:"load_metadata_sealed"`
 	CodeSegments      bool `json:"code_segments_sealed"`
+	ProtectedSlots    bool `json:"protected_slots_sealed"`
 	InputSealed       bool `json:"input_sealed"`
 	PlaintextAudit    bool `json:"plaintext_audit"`
 	SectionStripped   bool `json:"section_stripped"`
@@ -296,6 +299,8 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 			RuntimePayloadSHA256: m.RuntimePayload.SHA256,
 			LoadMetadataSHA256:   m.LoadMetadata.ProgramHeaderHash,
 			CodeSegmentCount:     len(m.CodeSegments),
+			ProtectedSlotSHA256:  m.ProtectedSlots.SHA256,
+			ProtectedSlotCount:   m.ProtectedSlots.Count,
 		},
 		Capabilities: auditCapabilities(m),
 	}
@@ -328,6 +333,7 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_payload", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "load_metadata", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "code_segments", Status: "skipped", Detail: "output unavailable"})
+		audit.Checks = append(audit.Checks, auditCheck{Name: "protected_slots", Status: "skipped", Detail: "output unavailable"})
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "skipped", Detail: "output unavailable"})
 		if elfstr.ManifestRequiresRuntimeDispatchAudit(m) {
 			audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_dispatch", Status: "skipped", Detail: "output unavailable"})
@@ -369,6 +375,15 @@ func buildManifestAudit(manifestPath string, m *elfstr.Manifest) manifestAudit {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: status, Detail: err.Error()})
 	} else {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "plaintext_slots", Status: "ok"})
+	}
+	if err := elfstr.ValidateManifestProtectedSlots(m, inputPath, outputPath); err != nil {
+		status := "invalid"
+		if isMissingPathError(err) {
+			status = "unavailable"
+		}
+		audit.Checks = append(audit.Checks, auditCheck{Name: "protected_slots", Status: status, Detail: err.Error()})
+	} else {
+		audit.Checks = append(audit.Checks, auditCheck{Name: "protected_slots", Status: "ok", Detail: m.ProtectedSlots.SHA256})
 	}
 	if err := elfstr.ValidateManifestRuntimeTable(m, outputPath); err != nil {
 		audit.Checks = append(audit.Checks, auditCheck{Name: "runtime_table", Status: "invalid", Detail: err.Error()})
@@ -415,6 +430,7 @@ func auditCapabilities(m *elfstr.Manifest) auditFeatures {
 		RuntimePayload:    m.RuntimePayload.SHA256 != "",
 		LoadMetadata:      m.LoadMetadata.ELFHeaderSHA256 != "" && m.LoadMetadata.ProgramHeaderHash != "",
 		CodeSegments:      len(m.CodeSegments) > 0,
+		ProtectedSlots:    m.ProtectedSlots.SHA256 != "" && m.ProtectedSlots.Count == m.EntryCount,
 		InputSealed:       m.InputSHA256 != "",
 		PlaintextAudit:    m.Protection.PlaintextAudit != "",
 		SectionStripped:   !m.Options.KeepSections,
@@ -512,13 +528,16 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		m.LoadMetadata.ELFHeaderSHA256 != "" &&
 		m.LoadMetadata.ProgramHeaderHash != "" &&
 		len(m.CodeSegments) > 0 &&
+		m.ProtectedSlots.SHA256 != "" &&
+		m.ProtectedSlots.Count == m.EntryCount &&
 		auditHasOKCheck(audit, "runtime_payload") &&
 		auditHasOKCheck(audit, "load_metadata") &&
 		auditHasOKCheck(audit, "code_segments") &&
+		auditHasOKCheck(audit, "protected_slots") &&
 		auditHasOKCheck(audit, "runtime_table") &&
 		auditHasOKCheck(audit, "runtime_dispatch")
 	if !strongMode {
-		recommendations = append(recommendations, "aggressive preset with patched lazy callsites, load metadata seals, and code segment seals is required for commercial-ready grade")
+		recommendations = append(recommendations, "aggressive preset with patched lazy callsites, load metadata seals, code segment seals, and protected slot seals is required for commercial-ready grade")
 	}
 	if score < 0 {
 		score = 0
@@ -593,6 +612,9 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	if len(m.CodeSegments) > 0 {
 		fmt.Printf("代码段封印: %d 个 LOAD 段\n", len(m.CodeSegments))
 	}
+	if m.ProtectedSlots.SHA256 != "" {
+		fmt.Printf("受保护槽位封印: count=%d size=%d sha256=%s\n", m.ProtectedSlots.Count, m.ProtectedSlots.Size, m.ProtectedSlots.SHA256)
+	}
 }
 
 func printAuditCheck(check auditCheck) {
@@ -605,6 +627,7 @@ func printAuditCheck(check auditCheck) {
 		"runtime_payload":  "运行时_payload",
 		"load_metadata":    "装载元数据封印",
 		"code_segments":    "代码段封印",
+		"protected_slots":  "受保护槽位封印",
 		"plaintext_slots":  "明文槽位",
 		"runtime_table":    "运行时表",
 		"runtime_dispatch": "运行时分派",

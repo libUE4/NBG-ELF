@@ -5,12 +5,14 @@ import (
 	crand "crypto/rand"
 	"crypto/sha256"
 	"debug/elf"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,7 +21,7 @@ import (
 )
 
 const (
-	Schema                   = "nbg-elf-string-crypt-v8"
+	Schema                   = "nbg-elf-string-crypt-v9"
 	minStringLen             = 4
 	defaultMinLen            = 6
 	runtimeStageCount        = 4
@@ -56,6 +58,7 @@ type Manifest struct {
 	RuntimePayload RuntimePayloadInfo `json:"runtime_payload,omitempty"`
 	LoadMetadata   LoadMetadataInfo   `json:"load_metadata,omitempty"`
 	CodeSegments   []CodeSegmentInfo  `json:"code_segments,omitempty"`
+	ProtectedSlots ProtectedSlotsInfo `json:"protected_slots,omitempty"`
 	InputPath      string             `json:"input_path"`
 	OutputPath     string             `json:"output_path"`
 	InputSHA256    string             `json:"input_sha256"`
@@ -116,6 +119,12 @@ type CodeSegmentInfo struct {
 	FileOffset uint64 `json:"file_offset"`
 	VAddr      uint64 `json:"vaddr"`
 	Flags      uint32 `json:"flags"`
+}
+
+type ProtectedSlotsInfo struct {
+	SHA256 string `json:"sha256"`
+	Count  int    `json:"count"`
+	Size   uint64 `json:"size"`
 }
 
 type ProtectionProfile struct {
@@ -346,6 +355,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	protectedSlots, err := protectedSlotsInfoFromEntries(out, manifestEntries)
+	if err != nil {
+		return nil, err
+	}
 	total := 0
 	for _, e := range manifestEntries {
 		total += e.Length
@@ -427,6 +440,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 		RuntimePayload: runtimePayload,
 		LoadMetadata:   loadMetadata,
 		CodeSegments:   codeSegments,
+		ProtectedSlots: protectedSlots,
 		Protection: ProtectionProfile{
 			Runtime:                "arm64-entrypoint-stub",
 			RandomizedLayout:       true,
@@ -594,6 +608,48 @@ func ValidateManifestPlaintextSlots(m *Manifest, inputPath, outputPath string) e
 		entries = filtered
 	}
 	return validateNoPlaintextResidue(inputRaw, outputRaw, entries)
+}
+
+func ValidateManifestProtectedSlots(m *Manifest, inputPath, outputPath string) error {
+	if m.ProtectedSlots.SHA256 == "" {
+		return fmt.Errorf("protected slot seal missing")
+	}
+	inputRaw, err := os.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	outputRaw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return err
+	}
+	minLen := m.MinLen
+	if minLen == 0 {
+		minLen = defaultMinLen
+	}
+	if minLen < minStringLen {
+		minLen = minStringLen
+	}
+	entries, err := scan(inputRaw, minLen, m.IncludeData, m.Options.SafeScan)
+	if err != nil {
+		return err
+	}
+	if len(entries) != m.EntryCount {
+		return fmt.Errorf("protected slot entry count mismatch: scan=%d manifest=%d", len(entries), m.EntryCount)
+	}
+	got, err := protectedSlotsInfoFromEntries(outputRaw, entries)
+	if err != nil {
+		return err
+	}
+	if got.Count != m.ProtectedSlots.Count {
+		return fmt.Errorf("protected slot count got %d want %d", got.Count, m.ProtectedSlots.Count)
+	}
+	if got.Size != m.ProtectedSlots.Size {
+		return fmt.Errorf("protected slot size got %#x want %#x", got.Size, m.ProtectedSlots.Size)
+	}
+	if got.SHA256 != m.ProtectedSlots.SHA256 {
+		return fmt.Errorf("protected slot sha256 got %s want %s", got.SHA256, m.ProtectedSlots.SHA256)
+	}
+	return nil
 }
 
 func ValidateManifestRuntimeDispatch(m *Manifest, outputPath string) error {
@@ -893,6 +949,43 @@ func codeSegmentInfoFromBytes(outputRaw []byte, runtimePayload RuntimePayloadInf
 		return nil, fmt.Errorf("no executable code LOAD segments found")
 	}
 	return out, nil
+}
+
+func protectedSlotsInfoFromEntries(outputRaw []byte, entries []Entry) (ProtectedSlotsInfo, error) {
+	realEntries := realRuntimeEntries(entries)
+	if len(realEntries) == 0 {
+		return ProtectedSlotsInfo{}, fmt.Errorf("protected slot entries missing")
+	}
+	ordered := append([]Entry(nil), realEntries...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Offset == ordered[j].Offset {
+			return ordered[i].VAddr < ordered[j].VAddr
+		}
+		return ordered[i].Offset < ordered[j].Offset
+	})
+	h := sha256.New()
+	var total uint64
+	var scratch [24]byte
+	for _, e := range ordered {
+		if e.Length <= 0 {
+			return ProtectedSlotsInfo{}, fmt.Errorf("protected slot length must be > 0")
+		}
+		end := e.Offset + uint64(e.Length)
+		if end < e.Offset || end > uint64(len(outputRaw)) {
+			return ProtectedSlotsInfo{}, fmt.Errorf("protected slot outside output: off=%#x len=%#x file=%#x", e.Offset, e.Length, len(outputRaw))
+		}
+		binary.LittleEndian.PutUint64(scratch[0:], e.Offset)
+		binary.LittleEndian.PutUint64(scratch[8:], e.VAddr)
+		binary.LittleEndian.PutUint64(scratch[16:], uint64(e.Length))
+		_, _ = h.Write(scratch[:])
+		_, _ = h.Write(outputRaw[e.Offset:end])
+		total += uint64(e.Length)
+	}
+	return ProtectedSlotsInfo{
+		SHA256: hex.EncodeToString(h.Sum(nil)),
+		Count:  len(ordered),
+		Size:   total,
+	}, nil
 }
 
 func ReadManifest(path string) (*Manifest, error) {
