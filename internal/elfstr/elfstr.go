@@ -366,7 +366,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			KeyScope:               "per-string-salted-variant",
 			KeyMaterial:            "dual-arx-xorshift-split-runtime-seed-uint32-per-entry-salt-va-pos-row-tag",
 			RuntimeTable:           runtimeTable,
-			TableOrder:             "per-build-stage-shuffle-random-decoy-clusters",
+			TableOrder:             "per-build-stage-shuffle-random-decoy-clusters-full-table-shuffle",
 			DecoyCount:             decoyCount,
 			EntryEncoding:          "tagged-dual-layer-xorshift-arx-per-entry-salt-variant-va-pos-cfg",
 			RuntimeSelfCheck:       true,

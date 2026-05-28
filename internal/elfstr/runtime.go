@@ -884,6 +884,13 @@ func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
 		out = append(out, d)
 		decoyLeft--
 	}
+	for i := len(out) - 1; i > 0; i-- {
+		j, err := randomIndex(i + 1)
+		if err != nil {
+			return nil, 0, err
+		}
+		out[i], out[j] = out[j], out[i]
+	}
 	for i := range out {
 		out[i].RuntimeIndex = i
 	}

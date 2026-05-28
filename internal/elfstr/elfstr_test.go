@@ -235,10 +235,22 @@ func TestRuntimeEntriesFilterDoesNotMutateTable(t *testing.T) {
 	if !equalEntriesForTest(table, before) {
 		t.Fatalf("realRuntimeEntries mutated runtime table; this breaks table index based string keys")
 	}
+	realOrderMatchesInput := true
+	realPos := 0
 	for i, e := range table {
 		if e.RuntimeIndex != i {
 			t.Fatalf("runtime index mismatch at table slot %d: got %d", i, e.RuntimeIndex)
 		}
+		if e.Section == "<decoy>" {
+			continue
+		}
+		if realPos >= len(entries) || e.VAddr != entries[realPos].VAddr {
+			realOrderMatchesInput = false
+		}
+		realPos++
+	}
+	if realOrderMatchesInput {
+		t.Fatalf("runtime table preserved original real-entry order; expected full-table shuffle")
 	}
 }
 
