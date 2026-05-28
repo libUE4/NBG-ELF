@@ -38,13 +38,21 @@ const (
 	stubLazyHashOff         = 0x1744
 	stubLazyHashSeedOff     = 0x1748
 	stubLazyHashMaskOff     = 0x174c
-	stubLazyTableOff        = 0x1750
+	stubLazyMaskIndexMulOff = 0x1750
+	stubLazyMaskPosMulOff   = 0x1754
+	stubLazyMaskBaseOff     = 0x1758
+	stubLazyMaskRoundMulOff = 0x175c
+	stubLazyTableOff        = 0x1760
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x17a0
+	stubDataEndOff          = 0x17b0
 	stubLazyHashPlaceholder = 0x89abcdef
 	stubLazySeedPlaceholder = 0x6d2b79f5
 	stubLazyMaskPlaceholder = 0xa5c35a7e
+	stubLazyMaskIndexMul    = 0x045d9f3b
+	stubLazyMaskPosMul      = 0x27d4eb2d
+	stubLazyMaskBase        = 0x6a09e667
+	stubLazyMaskRoundMul    = 0x9e3779b9
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -62,6 +70,10 @@ type RuntimeMeta struct {
 	KeySeed          uint32
 	LazyHashSeed     uint32
 	LazyHashMask     uint32
+	LazyMaskIndexMul uint32
+	LazyMaskPosMul   uint32
+	LazyMaskBase     uint32
+	LazyMaskRoundMul uint32
 	ParamTableA      uint32
 	ParamTableB      uint32
 	ParamKeyIndex    uint32
@@ -128,6 +140,9 @@ func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]b
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := fillLazyMaskParams(&meta); err != nil {
+		return nil, err
 	}
 	if err := fillRuntimeParams(&meta); err != nil {
 		return nil, err
@@ -349,13 +364,22 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 	if expectedEntries < 0 {
 		return nil, fmt.Errorf("expected lazy dispatch count must be >= 0")
 	}
-	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyHashOff+4 || len(payloadRaw) <= stubLazyHashSeedOff+4 || len(payloadRaw) <= stubLazyHashMaskOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
+	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyHashOff+4 || len(payloadRaw) <= stubLazyHashSeedOff+4 || len(payloadRaw) <= stubLazyHashMaskOff+4 || len(payloadRaw) <= stubLazyMaskIndexMulOff+4 || len(payloadRaw) <= stubLazyMaskPosMulOff+4 || len(payloadRaw) <= stubLazyMaskBaseOff+4 || len(payloadRaw) <= stubLazyMaskRoundMulOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
 		return nil, fmt.Errorf("runtime payload too small for lazy dispatch metadata")
 	}
 	lazyCount := binary.LittleEndian.Uint32(payloadRaw[stubLazyCountOff:])
-	lazyHashSeed := binary.LittleEndian.Uint32(payloadRaw[stubLazyHashSeedOff:])
-	lazyHashMask := binary.LittleEndian.Uint32(payloadRaw[stubLazyHashMaskOff:])
-	lazyHash := binary.LittleEndian.Uint32(payloadRaw[stubLazyHashOff:]) ^ lazyHashMask
+	meta := RuntimeMeta{
+		LazyHashSeed:     binary.LittleEndian.Uint32(payloadRaw[stubLazyHashSeedOff:]),
+		LazyHashMask:     binary.LittleEndian.Uint32(payloadRaw[stubLazyHashMaskOff:]),
+		LazyMaskIndexMul: binary.LittleEndian.Uint32(payloadRaw[stubLazyMaskIndexMulOff:]),
+		LazyMaskPosMul:   binary.LittleEndian.Uint32(payloadRaw[stubLazyMaskPosMulOff:]),
+		LazyMaskBase:     binary.LittleEndian.Uint32(payloadRaw[stubLazyMaskBaseOff:]),
+		LazyMaskRoundMul: binary.LittleEndian.Uint32(payloadRaw[stubLazyMaskRoundMulOff:]),
+	}
+	if meta.LazyHashSeed == 0 || meta.LazyHashMask == 0 || meta.LazyMaskIndexMul == 0 || meta.LazyMaskPosMul == 0 || meta.LazyMaskBase == 0 || meta.LazyMaskRoundMul == 0 {
+		return nil, fmt.Errorf("lazy dispatch keyed mask metadata is invalid")
+	}
+	lazyHash := binary.LittleEndian.Uint32(payloadRaw[stubLazyHashOff:]) ^ meta.LazyHashMask
 	if uint64(lazyCount) != uint64(expectedEntries) {
 		return nil, fmt.Errorf("lazy dispatch entry count got %d want %d", lazyCount, expectedEntries)
 	}
@@ -380,13 +404,13 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 	if tableOff+tableLen > uint64(len(payloadRaw)) {
 		return nil, fmt.Errorf("lazy dispatch table outside payload file bytes: off=%#x len=%#x filesz=%#x", tableOff, tableLen, len(payloadRaw))
 	}
-	if got := hashLazyDispatchTable(payloadRaw[tableOff:tableOff+tableLen], lazyCount, lazyHashSeed); got != lazyHash {
+	if got := hashLazyDispatchTable(payloadRaw[tableOff:tableOff+tableLen], lazyCount, meta.LazyHashSeed); got != lazyHash {
 		return nil, fmt.Errorf("lazy dispatch table hash got %#x want %#x", got, lazyHash)
 	}
 	entries := make([]LazyDispatchEntry, 0, lazyCount)
 	for i := uint32(0); i < lazyCount; i++ {
 		off := int(tableOff) + int(i)*stubLazyEntSize
-		de, tag, pad := decodeLazyDispatchEntry(payloadRaw[off:off+stubLazyEntSize], i)
+		de, tag, pad := decodeLazyDispatchEntry(payloadRaw[off:off+stubLazyEntSize], i, meta)
 		if de.TextVA == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty text VA", i)
 		}
@@ -485,6 +509,18 @@ func validateEmbeddedStubLayout() error {
 	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyHashMaskOff:]) != stubLazyMaskPlaceholder {
 		return fmt.Errorf("runtime stub lazy hash mask placeholder mismatch at %#x", stubLazyHashMaskOff)
 	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyMaskIndexMulOff:]) != stubLazyMaskIndexMul {
+		return fmt.Errorf("runtime stub lazy mask index multiplier placeholder mismatch at %#x", stubLazyMaskIndexMulOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyMaskPosMulOff:]) != stubLazyMaskPosMul {
+		return fmt.Errorf("runtime stub lazy mask position multiplier placeholder mismatch at %#x", stubLazyMaskPosMulOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyMaskBaseOff:]) != stubLazyMaskBase {
+		return fmt.Errorf("runtime stub lazy mask base placeholder mismatch at %#x", stubLazyMaskBaseOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyMaskRoundMulOff:]) != stubLazyMaskRoundMul {
+		return fmt.Errorf("runtime stub lazy mask round multiplier placeholder mismatch at %#x", stubLazyMaskRoundMulOff)
+	}
 	if binary.LittleEndian.Uint64(assets.StrdecBlob[stubLazyTableOff:]) != 0x123456789abcdef0 {
 		return fmt.Errorf("runtime stub lazy table placeholder mismatch at %#x", stubLazyTableOff)
 	}
@@ -569,8 +605,8 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	if len(dispatchEntries) == 0 {
 		return data, nil
 	}
-	if meta.LazyHashSeed == 0 || meta.LazyHashMask == 0 {
-		return nil, fmt.Errorf("lazy dispatch hash seed and mask must be non-zero")
+	if meta.LazyHashSeed == 0 || meta.LazyHashMask == 0 || meta.LazyMaskIndexMul == 0 || meta.LazyMaskPosMul == 0 || meta.LazyMaskBase == 0 || meta.LazyMaskRoundMul == 0 {
+		return nil, fmt.Errorf("lazy dispatch hash and mask parameters must be non-zero")
 	}
 	ehdr := readEhdr64(data)
 	var payloadPh *elf64Phdr
@@ -590,19 +626,23 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	tableLen := uint64(stubLazyEntSize * len(dispatchEntries))
 	newPayloadLen := int(tableStart + tableLen)
 
-	if int(stubLazyCountOff)+4 > len(payload) || int(stubLazyHashOff)+4 > len(payload) || int(stubLazyHashSeedOff)+4 > len(payload) || int(stubLazyHashMaskOff)+4 > len(payload) || int(stubLazyTableOff)+8 > len(payload) {
+	if int(stubLazyCountOff)+4 > len(payload) || int(stubLazyHashOff)+4 > len(payload) || int(stubLazyHashSeedOff)+4 > len(payload) || int(stubLazyHashMaskOff)+4 > len(payload) || int(stubLazyMaskIndexMulOff)+4 > len(payload) || int(stubLazyMaskPosMulOff)+4 > len(payload) || int(stubLazyMaskBaseOff)+4 > len(payload) || int(stubLazyMaskRoundMulOff)+4 > len(payload) || int(stubLazyTableOff)+8 > len(payload) {
 		return nil, fmt.Errorf("runtime payload too small for lazy dispatch placeholders")
 	}
 	binary.LittleEndian.PutUint32(payload[stubLazyCountOff:], uint32(len(dispatchEntries)))
 	binary.LittleEndian.PutUint32(payload[stubLazyHashSeedOff:], meta.LazyHashSeed)
 	binary.LittleEndian.PutUint32(payload[stubLazyHashMaskOff:], meta.LazyHashMask)
+	binary.LittleEndian.PutUint32(payload[stubLazyMaskIndexMulOff:], meta.LazyMaskIndexMul)
+	binary.LittleEndian.PutUint32(payload[stubLazyMaskPosMulOff:], meta.LazyMaskPosMul)
+	binary.LittleEndian.PutUint32(payload[stubLazyMaskBaseOff:], meta.LazyMaskBase)
+	binary.LittleEndian.PutUint32(payload[stubLazyMaskRoundMulOff:], meta.LazyMaskRoundMul)
 	binary.LittleEndian.PutUint64(payload[stubLazyTableOff:], payloadVA+tableStart)
 	for len(payload) < newPayloadLen {
 		payload = append(payload, 0)
 	}
 	for i, de := range dispatchEntries {
 		off := int(tableStart) + i*stubLazyEntSize
-		encodeLazyDispatchEntry(payload[off:off+stubLazyEntSize], de, uint32(i))
+		encodeLazyDispatchEntry(payload[off:off+stubLazyEntSize], de, uint32(i), meta)
 	}
 	lazyHash := hashLazyDispatchTable(payload[tableStart:tableStart+tableLen], uint32(len(dispatchEntries)), meta.LazyHashSeed)
 	binary.LittleEndian.PutUint32(payload[stubLazyHashOff:], lazyHash^meta.LazyHashMask)
@@ -634,7 +674,7 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	return data, nil
 }
 
-func encodeLazyDispatchEntry(dst []byte, de LazyDispatchEntry, index uint32) {
+func encodeLazyDispatchEntry(dst []byte, de LazyDispatchEntry, index uint32, meta RuntimeMeta) {
 	if len(dst) < stubLazyEntSize {
 		return
 	}
@@ -651,13 +691,13 @@ func encodeLazyDispatchEntry(dst []byte, de LazyDispatchEntry, index uint32) {
 	binary.LittleEndian.PutUint32(plain[41:], lazyDispatchTag(de))
 	binary.LittleEndian.PutUint64(plain[48:], de.OrigTarget)
 	copy(dst, plain[:])
-	cryptLazyDispatchEntry(dst[:stubLazyEntSize], index)
+	cryptLazyDispatchEntry(dst[:stubLazyEntSize], index, meta)
 }
 
-func decodeLazyDispatchEntry(src []byte, index uint32) (LazyDispatchEntry, uint32, [3]byte) {
+func decodeLazyDispatchEntry(src []byte, index uint32, meta RuntimeMeta) (LazyDispatchEntry, uint32, [3]byte) {
 	var raw [stubLazyEntSize]byte
 	copy(raw[:], src[:stubLazyEntSize])
-	cryptLazyDispatchEntry(raw[:], index)
+	cryptLazyDispatchEntry(raw[:], index, meta)
 	return LazyDispatchEntry{
 		TextVA:     binary.LittleEndian.Uint64(raw[0:]),
 		StringVA:   binary.LittleEndian.Uint64(raw[8:]),
@@ -672,18 +712,18 @@ func decodeLazyDispatchEntry(src []byte, index uint32) (LazyDispatchEntry, uint3
 	}, binary.LittleEndian.Uint32(raw[41:]), [3]byte{raw[45], raw[46], raw[47]}
 }
 
-func cryptLazyDispatchEntry(buf []byte, index uint32) {
+func cryptLazyDispatchEntry(buf []byte, index uint32, meta RuntimeMeta) {
 	for i := 0; i < stubLazyEntSize; i++ {
-		buf[i] ^= lazyDispatchMask(index, uint32(i))
+		buf[i] ^= lazyDispatchMask(index, uint32(i), meta)
 	}
 }
 
-func lazyDispatchMask(index, pos uint32) byte {
-	v := index*0x45d9f3b + pos*0x27d4eb2d + 0x6a09e667
+func lazyDispatchMask(index, pos uint32, meta RuntimeMeta) byte {
+	v := index*meta.LazyMaskIndexMul + pos*meta.LazyMaskPosMul + meta.LazyMaskBase
 	v ^= v << 13
 	v ^= v >> 17
 	v ^= v << 5
-	v += (index + 1) * 0x9e3779b9
+	v += (index + 1) * meta.LazyMaskRoundMul
 	v ^= pos << 11
 	v ^= v >> 16
 	return byte(v)
@@ -890,6 +930,38 @@ func encodeKeySeed(seed uint32) uint32 {
 }
 
 const runtimeKeyIndexParam = uint32(0x31)
+
+func fillLazyMaskParams(meta *RuntimeMeta) error {
+	var err error
+	if meta.LazyMaskIndexMul == 0 {
+		meta.LazyMaskIndexMul, err = randomOddUint32(stubLazyMaskIndexMul)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.LazyMaskPosMul == 0 {
+		meta.LazyMaskPosMul, err = randomOddUint32(stubLazyMaskPosMul)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.LazyMaskBase == 0 {
+		meta.LazyMaskBase, err = randomUint32()
+		if err != nil {
+			return err
+		}
+		if meta.LazyMaskBase == 0 {
+			meta.LazyMaskBase = stubLazyMaskBase
+		}
+	}
+	if meta.LazyMaskRoundMul == 0 {
+		meta.LazyMaskRoundMul, err = randomOddUint32(stubLazyMaskRoundMul)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func fillRuntimeParams(meta *RuntimeMeta) error {
 	var err error

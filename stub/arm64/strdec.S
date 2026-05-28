@@ -1611,21 +1611,21 @@ strdec_lazy_entry:
     ret
 
 .Llazy_mask:
-    mov w4, #0x9f3b
-    movk w4, #0x045d, lsl #16
+    adr x16, strdec_lazy_mask_index_mul
+    ldr w4, [x16]
     mul w4, w18, w4
-    mov w16, #0xeb2d
-    movk w16, #0x27d4, lsl #16
+    adr x16, strdec_lazy_mask_pos_mul
+    ldr w16, [x16]
     madd w4, w3, w16, w4
-    mov w16, #0xe667
-    movk w16, #0x6a09, lsl #16
+    adr x16, strdec_lazy_mask_base
+    ldr w16, [x16]
     add w4, w4, w16
     eor w4, w4, w4, lsl #13
     eor w4, w4, w4, lsr #17
     eor w4, w4, w4, lsl #5
     add w16, w18, #1
-    mov w17, #0x79b9
-    movk w17, #0x9e37, lsl #16
+    adr x17, strdec_lazy_mask_round_mul
+    ldr w17, [x17]
     madd w4, w16, w17, w4
     eor w4, w4, w3, lsl #11
     eor w4, w4, w4, lsr #16
@@ -1718,6 +1718,14 @@ strdec_lazy_hash_seed:
     .word 0x6d2b79f5
 strdec_lazy_hash_mask:
     .word 0xa5c35a7e
+strdec_lazy_mask_index_mul:
+    .word 0x045d9f3b
+strdec_lazy_mask_pos_mul:
+    .word 0x27d4eb2d
+strdec_lazy_mask_base:
+    .word 0x6a09e667
+strdec_lazy_mask_round_mul:
+    .word 0x9e3779b9
 .balign 8
 strdec_lazy_table:
     .quad 0x123456789abcdef0

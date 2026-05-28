@@ -196,6 +196,9 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	if err := fillLazyMaskParams(&meta); err != nil {
+		return nil, err
+	}
 	if err := fillRuntimeParams(&meta); err != nil {
 		return nil, err
 	}
@@ -333,7 +336,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	lazyCoverage := callsiteCoveragePercent(callsiteSelected, len(callsiteCandidates))
 	runtimeTable := "encrypted-per-entry-row-resealed"
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
-		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded; lazy-dispatch-table-keyed-hash"
+		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded; lazy-dispatch-table-keyed-hash; lazy-dispatch-mask-randomized"
 	}
 	report := ProtectionReport{
 		Preset:              effectivePreset(opts.Preset),
