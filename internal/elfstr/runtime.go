@@ -13,32 +13,32 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0x1060
-	stubHoneypotEntryOff    = 0x1448
-	stubAnchorOff           = 0x14e8
-	stubStaticVAOff         = 0x14f0
-	stubOrigEntryOff        = 0x14f8
-	stubPageVAOff           = 0x1500
-	stubPageLenOff          = 0x1508
-	stubPayloadLenOff       = 0x1510
-	stubEntryCountOff       = 0x1518
-	stubGuardSeedOff        = 0x151c
-	stubTableSeedOff        = 0x1520
-	stubKeySeedOff          = 0x1524
-	stubParamTableAOff      = 0x1528
-	stubParamTableBOff      = 0x152c
-	stubParamKeyIndexOff    = 0x1530
-	stubParamStringPosOff   = 0x1534
-	stubParamStringIndexOff = 0x1538
-	stubGuardHashOff        = 0x153c
-	stubOrigEntryKeyOff     = 0x1540
-	stubTableOff            = 0x1548
+	stubLazyEntryOff        = 0x1068
+	stubHoneypotEntryOff    = 0x14d8
+	stubAnchorOff           = 0x1578
+	stubStaticVAOff         = 0x1580
+	stubOrigEntryOff        = 0x1588
+	stubPageVAOff           = 0x1590
+	stubPageLenOff          = 0x1598
+	stubPayloadLenOff       = 0x15a0
+	stubEntryCountOff       = 0x15a8
+	stubGuardSeedOff        = 0x15ac
+	stubTableSeedOff        = 0x15b0
+	stubKeySeedOff          = 0x15b4
+	stubParamTableAOff      = 0x15b8
+	stubParamTableBOff      = 0x15bc
+	stubParamKeyIndexOff    = 0x15c0
+	stubParamStringPosOff   = 0x15c4
+	stubParamStringIndexOff = 0x15c8
+	stubGuardHashOff        = 0x15cc
+	stubOrigEntryKeyOff     = 0x15d0
+	stubTableOff            = 0x15d8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1560
-	stubLazyTableOff        = 0x1568
+	stubLazyCountOff        = 0x15f0
+	stubLazyTableOff        = 0x15f8
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x15b8
+	stubDataEndOff          = 0x1648
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -510,7 +510,7 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			PosParam:   posParam,
 			IdxParam:   idxParam,
 			SaltA:      e.SaltA,
-			SaltB:      e.SaltB,
+			SaltB:      e.SaltB | (uint32(e.ContentTag) << 16),
 			Variant:    e.Variant & 0x0f,
 			OrigTarget: c.CallTarget,
 		})
@@ -721,13 +721,15 @@ func buildRuntimeStringTable(entries []Entry, keySeed, keyIndexParam uint32) []b
 	for i, e := range entries {
 		off := i * stubTableEntSize
 		length := uint32(e.Length)
-		tag := runtimeEntryTag(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, e.SaltB, e.Variant)
+		saltB := e.SaltB & 0xffff
+		contentTag := e.ContentTag
+		tag := runtimeEntryTag(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, saltB, e.Variant)
 		packedLen := packRuntimeLength(length, e.Variant, tag)
 		binary.LittleEndian.PutUint64(out[off:], e.VAddr)
 		binary.LittleEndian.PutUint32(out[off+8:], packedLen)
-		binary.LittleEndian.PutUint32(out[off+12:], splitRuntimeKey(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, e.SaltB, e.Variant))
+		binary.LittleEndian.PutUint32(out[off+12:], splitRuntimeKey(e.Key, e.VAddr, length, uint32(i), keySeed, keyIndexParam, e.SaltA, saltB, e.Variant))
 		binary.LittleEndian.PutUint32(out[off+16:], e.SaltA)
-		binary.LittleEndian.PutUint32(out[off+20:], e.SaltB)
+		binary.LittleEndian.PutUint32(out[off+20:], saltB|(uint32(contentTag)<<16))
 	}
 	return out
 }
@@ -761,6 +763,34 @@ func runtimeEntryTag(key uint32, va uint64, length, index, keySeed, keyIndexPara
 	tag ^= tag >> 11
 	tag += 0x9e3779b9
 	return byte(tag ^ (tag >> 8) ^ (tag >> 16) ^ (tag >> 24))
+}
+
+func runtimeContentTag(e Entry) uint16 {
+	tag := e.Key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ e.SaltA ^ bitsRotateLeft32(e.SaltB&0xffff, 11) ^ uint32(e.Variant&0x0f) ^ 0x9e3779b9
+	plain := decodeEntryPlainForTag(e.Plain)
+	for pos, b := range plain {
+		tag ^= uint32(b) + uint32(pos)
+		tag = mixXorShift32(tag)
+	}
+	return uint16(tag ^ (tag >> 16))
+}
+
+func decodeEntryPlainForTag(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	raw, err := hex.DecodeString(s)
+	if err == nil && len(raw) > 0 {
+		return raw
+	}
+	return []byte(s)
+}
+
+func stripRuntimePlaintext(entries []Entry) []Entry {
+	for i := range entries {
+		entries[i].Plain = ""
+	}
+	return entries
 }
 
 func bitsRotateLeft32(v uint32, n uint) uint32 {
@@ -898,6 +928,50 @@ func prepareRuntimeTableEntries(entries []Entry) ([]Entry, int, error) {
 	return out, decoyCount, nil
 }
 
+func withRuntimeContentTags(entries []Entry, enabledVAs map[uint64]struct{}) []Entry {
+	out := append([]Entry(nil), entries...)
+	overlap := make([]bool, len(out))
+	for i := range out {
+		if _, enabled := enabledVAs[out[i].VAddr]; !enabled {
+			overlap[i] = true
+			continue
+		}
+		if out[i].Length <= 0 || out[i].Plain == "" {
+			overlap[i] = true
+			continue
+		}
+		startI := out[i].VAddr
+		endI := startI + uint64(out[i].Length)
+		if endI <= startI {
+			overlap[i] = true
+			continue
+		}
+		for j := 0; j < i; j++ {
+			startJ := out[j].VAddr
+			endJ := startJ + uint64(out[j].Length)
+			if endJ <= startJ {
+				continue
+			}
+			if startI < endJ && startJ < endI {
+				overlap[i] = true
+				overlap[j] = true
+			}
+		}
+	}
+	for i := range out {
+		if overlap[i] {
+			out[i].ContentTag = 0
+			continue
+		}
+		tag := runtimeContentTag(out[i])
+		if tag == 0 {
+			tag = 1
+		}
+		out[i].ContentTag = tag
+	}
+	return out
+}
+
 func realRuntimeEntries(entries []Entry) []Entry {
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
@@ -982,7 +1056,7 @@ func makeDecoyEntry(pageVA, pageLen uint64) (Entry, error) {
 		Phase:   "decoy",
 		Key:     key,
 		SaltA:   saltA,
-		SaltB:   saltB,
+		SaltB:   saltB & 0xffff,
 		Variant: uint8(variant),
 	}, nil
 }

@@ -916,6 +916,8 @@ strdec_entry:
     ldr w2, [x25, #12]
     ldr w15, [x25, #16]
     ldr w17, [x25, #20]
+    lsr w19, w17, #16
+    and w17, w17, #0xffff
 
     // Reconstruct the per-string key from split key material, VA, length,
     // table index, and per-entry salt/mixer/variant.
@@ -1264,6 +1266,9 @@ strdec_lazy_entry:
     ldr w13, [x5, #28]        // idx_param
     ldr w14, [x5, #32]        // saltA
     ldr w15, [x5, #36]        // saltB
+    lsr w18, w15, #16
+    and w15, w15, #0xffff
+    str w18, [sp, #200]
     ldrb w9, [x5, #40]        // variant
     ldr x10, [x5, #48]        // orig_target
     ldur w17, [x5, #41]       // tag
@@ -1390,6 +1395,39 @@ strdec_lazy_entry:
     b .Llazy_dec
     
 .Llazy_call:
+    ldr w18, [sp, #200]
+    cbz w18, .Llazy_mac_ok
+    mov w3, #0
+    mov w16, w11
+    eor w16, w16, w7
+    lsr x17, x7, #32
+    eor w16, w16, w17
+    eor w16, w16, w8
+    eor w16, w16, w14
+    ror w17, w15, #21
+    eor w16, w16, w17
+    eor w16, w16, w9
+    mov w17, #0x79b9
+    movk w17, #0x9e37, lsl #16
+    eor w16, w16, w17
+.Llazy_mac:
+    cmp w3, w8
+    b.hs .Llazy_mac_done
+    ldrb w4, [x0, x3]
+    add w17, w4, w3
+    eor w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    add w3, w3, #1
+    b .Llazy_mac
+.Llazy_mac_done:
+    eor w17, w16, w16, lsr #16
+    and w17, w17, #0xffff
+    cmp w17, w18
+    b.eq .Llazy_mac_ok
+    brk #0x7b2
+.Llazy_mac_ok:
     // Save table ptr to a dedicated stack slot; blr may clobber caller-saved registers
     str x5, [sp, #192]
     blr x10
@@ -1403,6 +1441,7 @@ strdec_lazy_entry:
     ldr w13, [x5, #28]        // idx_param
     ldr w14, [x5, #32]        // saltA
     ldr w15, [x5, #36]        // saltB
+    and w15, w15, #0xffff
     ldrb w9, [x5, #40]        // variant
     mov w3, #0
 .Llazy_enc:

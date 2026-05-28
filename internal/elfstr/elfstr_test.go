@@ -157,22 +157,37 @@ func TestRuntimeTableCryptAndSplitKeyRoundTrip(t *testing.T) {
 	if stubTableEntSize != 24 {
 		t.Fatalf("runtime table entry size got %d want 24", stubTableEntSize)
 	}
-	entries := []Entry{{VAddr: 0x123450, Length: 17, Key: 0x11223344, SaltA: 0x01020304, SaltB: 0x05060708, Variant: 1}, {VAddr: 0x223344, Length: 9, Key: 0x55667788, SaltA: 0xa1a2a3a4, SaltB: 0xb1b2b3b4, Variant: 2}}
+	entries := []Entry{
+		{VAddr: 0x123450, Length: 17, Key: 0x11223344, SaltA: 0x01020304, SaltB: 0x05060708, Variant: 1, Plain: "616263"},
+		{VAddr: 0x223344, Length: 9, Key: 0x55667788, SaltA: 0xa1a2a3a4, SaltB: 0xb1b2b3b4, Variant: 2, Plain: "646566"},
+	}
+	for i := range entries {
+		entries[i].SaltB &= 0xffff
+		entries[i].ContentTag = runtimeContentTag(entries[i])
+	}
 	table := buildRuntimeStringTable(entries, 0xaabbccdd, runtimeKeyIndexParam)
 	if readTableKeyShard(table, 0) == entries[0].Key || readTableKeyShard(table, 1) == entries[1].Key {
 		t.Fatalf("key shard should not equal raw key")
 	}
 	for i, e := range entries {
+		saltB := e.SaltB & 0xffff
 		shard := readTableKeyShard(table, i)
-		key := shard ^ runtimeKeySplitMask(e.VAddr, uint32(e.Length), uint32(i), 0xaabbccdd, runtimeKeyIndexParam, e.SaltA, e.SaltB, e.Variant)
+		key := shard ^ runtimeKeySplitMask(e.VAddr, uint32(e.Length), uint32(i), 0xaabbccdd, runtimeKeyIndexParam, e.SaltA, saltB, e.Variant)
 		if key != e.Key {
 			t.Fatalf("split key mismatch at %d: got %#x want %#x", i, key, e.Key)
+		}
+		packedSaltB := binary.LittleEndian.Uint32(table[i*stubTableEntSize+20:])
+		if got := packedSaltB & 0xffff; got != saltB {
+			t.Fatalf("saltB low bits mismatch at %d: got %#x want %#x", i, got, saltB)
+		}
+		if got := uint16(packedSaltB >> 16); got != e.ContentTag {
+			t.Fatalf("content tag mismatch at %d: got %#x want %#x", i, got, e.ContentTag)
 		}
 		packedLen := readTablePackedLen(table, i)
 		if got := packedLen & 0xffff; got != uint32(e.Length) {
 			t.Fatalf("length mismatch at %d: got %d want %d", i, got, e.Length)
 		}
-		wantTag := runtimeEntryTag(e.Key, e.VAddr, uint32(e.Length), uint32(i), 0xaabbccdd, runtimeKeyIndexParam, e.SaltA, e.SaltB, e.Variant)
+		wantTag := runtimeEntryTag(e.Key, e.VAddr, uint32(e.Length), uint32(i), 0xaabbccdd, runtimeKeyIndexParam, e.SaltA, saltB, e.Variant)
 		if got := byte(packedLen >> 16); got != wantTag {
 			t.Fatalf("runtime entry tag mismatch at %d: got %#x want %#x", i, got, wantTag)
 		}
@@ -315,6 +330,29 @@ func TestStringPageWindowIgnoresDecoys(t *testing.T) {
 	}
 	if pageVA, pageLen := stringPageWindow([]Entry{{Section: "<decoy>", VAddr: 0x10000000, Length: 64}}); pageVA != 0 || pageLen != 0 {
 		t.Fatalf("decoy-only window got va=%#x len=%#x", pageVA, pageLen)
+	}
+}
+
+func TestRuntimeContentTagsSkipOverlappingEntries(t *testing.T) {
+	entries := []Entry{
+		{VAddr: 0x1000, Length: 8, Key: 1, SaltA: 2, SaltB: 3, Variant: 1, Plain: "6162636465666768"},
+		{VAddr: 0x1004, Length: 4, Key: 4, SaltA: 5, SaltB: 6, Variant: 2, Plain: "65666768"},
+		{VAddr: 0x2000, Length: 4, Key: 7, SaltA: 8, SaltB: 9, Variant: 3, Plain: "71727374"},
+	}
+	enabled := map[uint64]struct{}{0x1000: {}, 0x1004: {}, 0x2000: {}}
+	tagged := withRuntimeContentTags(entries, enabled)
+	if tagged[0].ContentTag != 0 || tagged[1].ContentTag != 0 {
+		t.Fatalf("overlapping entries should skip content tags: %#v", tagged)
+	}
+	if tagged[2].ContentTag == 0 {
+		t.Fatalf("non-overlapping entry should have content tag")
+	}
+	if entries[2].ContentTag != 0 {
+		t.Fatalf("withRuntimeContentTags mutated input")
+	}
+	tagged = withRuntimeContentTags(entries, map[uint64]struct{}{0x2000: {}})
+	if tagged[0].ContentTag != 0 || tagged[1].ContentTag != 0 || tagged[2].ContentTag == 0 {
+		t.Fatalf("content tags should only be enabled for selected VAs: %#v", tagged)
 	}
 }
 
@@ -1063,6 +1101,14 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	}
 	if _, ok := decoded["report"]; !ok {
 		t.Fatalf("manifest json missing report: %s", raw)
+	}
+	m.Entries = []Entry{{SHA256: "abc", Plain: "secret"}}
+	raw, err = json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal manifest with entries: %v", err)
+	}
+	if bytes.Contains(raw, []byte("secret")) || bytes.Contains(raw, []byte("Plain")) || bytes.Contains(raw, []byte("plain")) {
+		t.Fatalf("manifest leaked internal plaintext field: %s", raw)
 	}
 	report := decoded["report"].(map[string]any)
 	for _, key := range []string{"runtime_table_entries", "runtime_decoys", "runtime_decoy_ratio", "lazy_coverage_percent"} {

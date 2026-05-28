@@ -136,10 +136,12 @@ type Entry struct {
 	RuntimeIndex int    `json:"runtime_index"`
 	Phase        string `json:"phase"`
 	SHA256       string `json:"sha256"`
+	Plain        string `json:"-"`
 	Key          uint32 `json:"-"`
 	SaltA        uint32 `json:"-"`
 	SaltB        uint32 `json:"-"`
 	Variant      uint8  `json:"-"`
+	ContentTag   uint16 `json:"-"`
 }
 
 func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Manifest, error) {
@@ -212,6 +214,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	lazyStringVAs := make(map[uint64]struct{})
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
 		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
+		runtimeEntries = withRuntimeContentTags(runtimeEntries, lazyStringVAs)
+		dispatchEntries = buildLazyDispatchEntries(selectedLazyCandidates, runtimeEntries, meta)
+		callsiteSelected = len(dispatchEntries)
+		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
 	}
 	for _, e := range runtimeEntries {
 		if e.Length == 0 || e.Section == "<decoy>" {
@@ -273,6 +279,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err := validateNoPlaintextResidue(raw, out, nonLazyRuntimeEntries(manifestEntries, lazyStringVAs)); err != nil {
 		return nil, err
 	}
+	manifestEntries = stripRuntimePlaintext(manifestEntries)
 	if outputPath == "" {
 		outputPath = inputPath + ".vmp"
 	}
@@ -840,6 +847,7 @@ func appendString(out []Entry, section string, baseOff, baseVA uint64, data []by
 		VAddr:   baseVA + uint64(start),
 		Length:  len(s),
 		SHA256:  hex.EncodeToString(sum[:]),
+		Plain:   hex.EncodeToString(s),
 	})
 }
 
@@ -887,7 +895,7 @@ func prepareRuntimeEntries(entries []Entry) ([]Entry, error) {
 		out[i].RuntimeIndex = i
 		out[i].Key = key
 		out[i].SaltA = saltA
-		out[i].SaltB = saltB
+		out[i].SaltB = saltB & 0xffff
 		out[i].Variant = uint8(variant)
 	}
 	return out, nil
