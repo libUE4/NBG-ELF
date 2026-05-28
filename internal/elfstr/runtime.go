@@ -13,42 +13,42 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0x1158
-	stubHoneypotEntryOff    = 0x17cc
-	stubAnchorOff           = 0x1868
-	stubStaticVAOff         = 0x1870
-	stubOrigEntryOff        = 0x1878
-	stubPageVAOff           = 0x1880
-	stubPageLenOff          = 0x1888
-	stubPayloadLenOff       = 0x1890
-	stubEntryCountOff       = 0x1898
-	stubGuardSeedOff        = 0x189c
-	stubTableSeedOff        = 0x18a0
-	stubKeySeedOff          = 0x18a4
-	stubParamTableAOff      = 0x18a8
-	stubParamTableBOff      = 0x18ac
-	stubParamKeyIndexOff    = 0x18b0
-	stubParamStringPosOff   = 0x18b4
-	stubParamStringIndexOff = 0x18b8
-	stubGuardHashOff        = 0x18bc
-	stubOrigEntryKeyOff     = 0x18c0
-	stubRuntimeTableHashOff = 0x18c8
-	stubRuntimeTableSeedOff = 0x18cc
-	stubRuntimeTableMaskOff = 0x18d0
-	stubTableOff            = 0x18d8
+	stubLazyEntryOff        = 0x11d4
+	stubHoneypotEntryOff    = 0x1940
+	stubAnchorOff           = 0x19e0
+	stubStaticVAOff         = 0x19e8
+	stubOrigEntryOff        = 0x19f0
+	stubPageVAOff           = 0x19f8
+	stubPageLenOff          = 0x1a00
+	stubPayloadLenOff       = 0x1a08
+	stubEntryCountOff       = 0x1a10
+	stubGuardSeedOff        = 0x1a14
+	stubTableSeedOff        = 0x1a18
+	stubKeySeedOff          = 0x1a1c
+	stubParamTableAOff      = 0x1a20
+	stubParamTableBOff      = 0x1a24
+	stubParamKeyIndexOff    = 0x1a28
+	stubParamStringPosOff   = 0x1a2c
+	stubParamStringIndexOff = 0x1a30
+	stubGuardHashOff        = 0x1a34
+	stubOrigEntryKeyOff     = 0x1a38
+	stubRuntimeTableHashOff = 0x1a40
+	stubRuntimeTableSeedOff = 0x1a44
+	stubRuntimeTableMaskOff = 0x1a48
+	stubTableOff            = 0x1a50
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x18f0
-	stubLazyHashOff         = 0x18f4
-	stubLazyHashSeedOff     = 0x18f8
-	stubLazyHashMaskOff     = 0x18fc
-	stubLazyMaskIndexMulOff = 0x1900
-	stubLazyMaskPosMulOff   = 0x1904
-	stubLazyMaskBaseOff     = 0x1908
-	stubLazyMaskRoundMulOff = 0x190c
-	stubLazyTableOff        = 0x1910
+	stubLazyCountOff        = 0x1a68
+	stubLazyHashOff         = 0x1a6c
+	stubLazyHashSeedOff     = 0x1a70
+	stubLazyHashMaskOff     = 0x1a74
+	stubLazyMaskIndexMulOff = 0x1a78
+	stubLazyMaskPosMulOff   = 0x1a7c
+	stubLazyMaskBaseOff     = 0x1a80
+	stubLazyMaskRoundMulOff = 0x1a84
+	stubLazyTableOff        = 0x1a88
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1960
+	stubDataEndOff          = 0x1ad8
 	stubRuntimeTableHash    = 0x13579bdf
 	stubRuntimeTableSeed    = 0x2468ace1
 	stubRuntimeTableMask    = 0xf0e1d2c3
@@ -1181,13 +1181,20 @@ func withRuntimeContentTags(entries []Entry, enabledVAs map[uint64]struct{}) []E
 			out[i].ContentTag = 0
 			continue
 		}
-		tag := runtimeContentTag(out[i])
-		if tag == 0 {
-			tag = 1
-		}
-		out[i].ContentTag = tag
+		out[i].ContentTag = nonZeroRuntimeContentTag(&out[i])
 	}
 	return out
+}
+
+func nonZeroRuntimeContentTag(e *Entry) uint16 {
+	for attempt := 0; attempt <= 0xffff; attempt++ {
+		tag := runtimeContentTag(*e)
+		if tag != 0 {
+			return tag
+		}
+		e.SaltB = (e.SaltB + 1) & 0xffff
+	}
+	return 0
 }
 
 func allRuntimeContentTagVAs(entries []Entry) map[uint64]struct{} {
@@ -1393,6 +1400,7 @@ func cryptRuntimeString(buf []byte, va uint64, index uint32, key, posParam, inde
 			mask ^= state >> 11
 		}
 		mask ^= runtimeStringHardMask(state, va, uint32(pos), saltA, saltB, indexParam, variant)
+		mask ^= runtimeStringDriftMask(state, va, uint32(pos), saltA, saltB, posParam, indexParam, variant)
 		buf[pos] ^= byte(mask)
 	}
 }
@@ -1408,6 +1416,16 @@ func runtimeStringHardMask(state uint32, va uint64, pos, saltA, saltB, indexPara
 	aux ^= bitsRotateLeft32(aux+(uint32(variant&0x0f)*0x9e3779b9), uint((pos&7)+5))
 	aux ^= aux >> 13
 	return hard ^ aux
+}
+
+func runtimeStringDriftMask(state uint32, va uint64, pos, saltA, saltB, posParam, indexParam uint32, variant uint8) uint32 {
+	drift := state ^ bitsRotateLeft32(saltA+pos, uint((pos&7)+3))
+	drift += saltB ^ uint32(va>>32)
+	drift ^= (pos + 1) * (posParam | 1)
+	drift += uint32(variant&0x0f) * 0x6d2b79f5
+	drift = mixXorShift32(drift)
+	drift ^= bitsRotateLeft32(drift+indexParam+uint32(va>>7), uint((pos&3)+9))
+	return mixXorShift32(drift)
 }
 
 func computeRuntimeGuardHash(code []byte, seed uint32) uint32 {

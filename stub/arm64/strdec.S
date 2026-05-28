@@ -1117,6 +1117,37 @@ strdec_entry:
     eor w6, w6, w8
     eor w6, w6, w6, lsr #13
     eor w5, w5, w6
+    add w6, w15, w3
+    and w8, w3, #7
+    add w8, w8, #3
+    neg w8, w8
+    ror w6, w6, w8
+    eor w6, w6, w28
+    lsr x8, x7, #32
+    eor w8, w8, w17
+    add w6, w6, w8
+    mul w8, w3, w13
+    add w8, w8, w13
+    eor w6, w6, w8
+    mov w8, #0x79f5
+    movk w8, #0x6d2b, lsl #16
+    mul w8, w16, w8
+    add w6, w6, w8
+    eor w6, w6, w6, lsl #13
+    eor w6, w6, w6, lsr #17
+    eor w6, w6, w6, lsl #5
+    lsr x8, x7, #7
+    add w8, w8, w14
+    add w8, w8, w6
+    and w27, w3, #3
+    add w27, w27, #9
+    neg w27, w27
+    ror w8, w8, w27
+    eor w6, w6, w8
+    eor w6, w6, w6, lsl #13
+    eor w6, w6, w6, lsr #17
+    eor w6, w6, w6, lsl #5
+    eor w5, w5, w6
     eor w4, w4, w5
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1541,6 +1572,37 @@ strdec_lazy_entry:
     eor w16, w16, w17
     eor w16, w16, w16, lsr #13
     eor w6, w6, w16
+    add w16, w14, w3
+    and w17, w3, #7
+    add w17, w17, #3
+    neg w17, w17
+    ror w16, w16, w17
+    eor w16, w16, w11
+    lsr x17, x7, #32
+    eor w17, w17, w15
+    add w16, w16, w17
+    mul w17, w3, w12
+    add w17, w17, w12
+    eor w16, w16, w17
+    mov w17, #0x79f5
+    movk w17, #0x6d2b, lsl #16
+    mul w17, w9, w17
+    add w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    lsr x17, x7, #7
+    add w17, w17, w13
+    add w17, w17, w16
+    and w18, w3, #3
+    add w18, w18, #9
+    neg w18, w18
+    ror w17, w17, w18
+    eor w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]
     add w3, w3, #1
@@ -1693,6 +1755,37 @@ strdec_lazy_entry:
     ror w17, w17, w18
     eor w16, w16, w17
     eor w16, w16, w16, lsr #13
+    eor w6, w6, w16
+    add w16, w14, w3
+    and w17, w3, #7
+    add w17, w17, #3
+    neg w17, w17
+    ror w16, w16, w17
+    eor w16, w16, w11
+    lsr x17, x7, #32
+    eor w17, w17, w15
+    add w16, w16, w17
+    mul w17, w3, w12
+    add w17, w17, w12
+    eor w16, w16, w17
+    mov w17, #0x79f5
+    movk w17, #0x6d2b, lsl #16
+    mul w17, w9, w17
+    add w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    lsr x17, x7, #7
+    add w17, w17, w13
+    add w17, w17, w16
+    and w18, w3, #3
+    add w18, w18, #9
+    neg w18, w18
+    ror w17, w17, w18
+    eor w16, w16, w17
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
     eor w6, w6, w16
     eor w4, w4, w6
     strb w4, [x0, x3]

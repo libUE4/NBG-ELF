@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -111,6 +112,49 @@ func cryptRuntimeStringLegacyForTest(buf []byte, va uint64, index uint32, key, p
 			mask ^= state >> 11
 		}
 		buf[pos] ^= byte(mask)
+	}
+}
+
+func TestNonZeroRuntimeContentTagAdjustsSalt(t *testing.T) {
+	entry := Entry{}
+	found := false
+	for saltB := uint32(0); saltB <= 0xffff && !found; saltB++ {
+		for suffix := byte(0); ; suffix++ {
+			candidate := Entry{
+				VAddr:   0x459158,
+				Length:  4,
+				Key:     0x7d71c4f5,
+				SaltA:   0x403310f5,
+				SaltB:   saltB,
+				Variant: 1,
+				Plain:   hex.EncodeToString([]byte{'t', 'a', 'g', suffix}),
+			}
+			if runtimeContentTag(candidate) == 0 {
+				entry = candidate
+				found = true
+				break
+			}
+			if suffix == 0xff {
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("failed to find zero-tag fixture")
+	}
+	zeroSaltB := entry.SaltB
+	if tag := runtimeContentTag(entry); tag != 0 {
+		t.Fatalf("fixture should start with zero tag, got %#x", tag)
+	}
+	tag := nonZeroRuntimeContentTag(&entry)
+	if tag == 0 {
+		t.Fatalf("nonZeroRuntimeContentTag returned zero")
+	}
+	if runtimeContentTag(entry) != tag {
+		t.Fatalf("adjusted salt does not reproduce tag")
+	}
+	if entry.SaltB&0xffff == zeroSaltB {
+		t.Fatalf("expected saltB adjustment")
 	}
 }
 
