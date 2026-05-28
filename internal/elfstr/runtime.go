@@ -593,11 +593,7 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 		if idxParam == 0 {
 			idxParam = 0x7b
 		}
-		state := key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ (uint32(e.RuntimeIndex) * idxParam) ^ posParam ^ e.SaltA ^ e.SaltB ^ uint32(e.Variant&0x0f)
-		contentTag := runtimeStateContentTag(state, e.VAddr, uint32(e.Length), e.SaltA, e.SaltB, e.Variant, decodeEntryPlainForTag(e.Plain))
-		if contentTag == 0 {
-			contentTag = 1
-		}
+		state, saltB, contentTag := lazyDispatchKeyStateAndTag(e, key, posParam, idxParam)
 		out = append(out, LazyDispatchEntry{
 			TextVA:     c.TextVAddr,
 			StringVA:   e.VAddr,
@@ -606,13 +602,28 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			PosParam:   posParam,
 			IdxParam:   idxParam,
 			SaltA:      e.SaltA,
-			SaltB:      e.SaltB | (uint32(contentTag) << 16),
+			SaltB:      saltB | (uint32(contentTag) << 16),
 			Variant:    e.Variant & 0x0f,
 			OrigTarget: c.CallTarget,
 		})
 	}
 	shuffleLazyDispatchEntries(out)
 	return out
+}
+
+func lazyDispatchKeyStateAndTag(e Entry, key, posParam, idxParam uint32) (uint32, uint32, uint16) {
+	plain := decodeEntryPlainForTag(e.Plain)
+	saltB := e.SaltB & 0xffff
+	for attempt := 0; attempt <= 0xffff; attempt++ {
+		state := key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ (uint32(e.RuntimeIndex) * idxParam) ^ posParam ^ e.SaltA ^ saltB ^ uint32(e.Variant&0x0f)
+		tag := runtimeStateContentTag(state, e.VAddr, uint32(e.Length), e.SaltA, saltB, e.Variant, plain)
+		if tag != 0 {
+			return state, saltB, tag
+		}
+		saltB = (saltB + 1) & 0xffff
+	}
+	state := key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ (uint32(e.RuntimeIndex) * idxParam) ^ posParam ^ e.SaltA ^ saltB ^ uint32(e.Variant&0x0f)
+	return state, saltB, 0
 }
 
 func shuffleLazyDispatchEntries(entries []LazyDispatchEntry) {

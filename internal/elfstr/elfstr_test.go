@@ -1013,7 +1013,8 @@ func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
 	if dispatch[0].StringVA != 0x5000 || dispatch[0].Length != 16 {
 		t.Fatalf("dispatch entry = %+v", dispatch[0])
 	}
-	wantTag := runtimeStateContentTag(dispatch[0].KeyState, dispatch[0].StringVA, dispatch[0].Length, dispatch[0].SaltA, entries[0].SaltB, dispatch[0].Variant, decodeEntryPlainForTag(entries[0].Plain))
+	dispatchSaltB := dispatch[0].SaltB & 0xffff
+	wantTag := runtimeStateContentTag(dispatch[0].KeyState, dispatch[0].StringVA, dispatch[0].Length, dispatch[0].SaltA, dispatchSaltB, dispatch[0].Variant, decodeEntryPlainForTag(entries[0].Plain))
 	if got := uint16(dispatch[0].SaltB >> 16); got != wantTag {
 		t.Fatalf("lazy content tag got %#x want state-based %#x", got, wantTag)
 	}
@@ -1023,6 +1024,51 @@ func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
 	lazyVAs := lazyDispatchStringEntryVAs(dispatch, entries)
 	if _, ok := lazyVAs[0x5000]; !ok || len(lazyVAs) != 1 {
 		t.Fatalf("lazy dispatch VA map = %#v", lazyVAs)
+	}
+}
+
+func TestLazyDispatchContentTagAdjustsZeroSalt(t *testing.T) {
+	entry := Entry{}
+	found := false
+	key := uint32(0x12345678)
+	posParam := uint32(0x9d)
+	idxParam := uint32(0x7b)
+	for saltB := uint32(0); saltB <= 0xffff && !found; saltB++ {
+		for suffix := byte(0); ; suffix++ {
+			candidate := Entry{
+				Section:      ".rodata",
+				VAddr:        0x5000,
+				Length:       4,
+				RuntimeIndex: 3,
+				Key:          key,
+				SaltA:        0x10,
+				SaltB:        saltB,
+				Variant:      2,
+				Plain:        hex.EncodeToString([]byte{'l', 'a', 'z', suffix}),
+			}
+			state := key ^ uint32(candidate.VAddr) ^ uint32(candidate.VAddr>>32) ^ uint32(candidate.Length) ^ (uint32(candidate.RuntimeIndex) * idxParam) ^ posParam ^ candidate.SaltA ^ candidate.SaltB ^ uint32(candidate.Variant&0x0f)
+			if runtimeStateContentTag(state, candidate.VAddr, uint32(candidate.Length), candidate.SaltA, candidate.SaltB, candidate.Variant, decodeEntryPlainForTag(candidate.Plain)) == 0 {
+				entry = candidate
+				found = true
+				break
+			}
+			if suffix == 0xff {
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("failed to find zero lazy tag fixture")
+	}
+	state, saltB, tag := lazyDispatchKeyStateAndTag(entry, key, posParam, idxParam)
+	if tag == 0 {
+		t.Fatalf("lazyDispatchKeyStateAndTag returned zero tag")
+	}
+	if saltB == entry.SaltB {
+		t.Fatalf("expected lazy saltB adjustment")
+	}
+	if got := runtimeStateContentTag(state, entry.VAddr, uint32(entry.Length), entry.SaltA, saltB, entry.Variant, decodeEntryPlainForTag(entry.Plain)); got != tag {
+		t.Fatalf("adjusted lazy tag got %#x want %#x", got, tag)
 	}
 }
 
