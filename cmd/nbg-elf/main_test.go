@@ -332,6 +332,65 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 	}
 }
 
+func TestBuildAuditSummaryBlocksManifestDetailForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
+			{Name: "load_metadata", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+			{Name: "code_segments", Status: "ok"},
+			{Name: "protected_slots", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		Options: elfstr.ManifestOptions{
+			ManifestDetail: true,
+		},
+		LoadMetadata: elfstr.LoadMetadataInfo{
+			ELFHeaderSHA256:   "ehdr",
+			ProgramHeaderHash: "phdr",
+		},
+		CodeSegments: []elfstr.CodeSegmentInfo{{
+			SHA256:     "code",
+			Size:       4096,
+			FileOffset: 0,
+			VAddr:      0x400000,
+			Flags:      5,
+		}},
+		ProtectedSlots: elfstr.ProtectedSlotsInfo{
+			SHA256: "slots",
+			Count:  4,
+			Size:   128,
+		},
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "runtime-state-dispatch",
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             0.3333333333333333,
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("manifest-detail summary should not be commercial-ready: %+v", summary)
+	}
+}
+
 func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 	m := &elfstr.Manifest{
 		ManifestSHA256: "manifest",

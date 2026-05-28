@@ -71,7 +71,7 @@ func runEncrypt(args []string) {
 	minLen := fs.Int("min", 6, "最小字符串长度")
 	includeData := fs.Bool("data", false, "同时加密 .data 段")
 	watermark := fs.String("watermark", "", "可选水印标识，将以哈希形式嵌入")
-	manifestDetail := fs.Bool("manifest-detail", false, "在 manifest 中记录每个字符串的偏移和哈希（隐私性较弱）")
+	manifestDetail := fs.Bool("manifest-detail", false, "诊断模式: 在 manifest 中记录每个字符串的偏移和哈希；会阻止 commercial-ready 等级")
 	keepSections := fs.Bool("keep-sections", false, "保留加密输出的节表（抗静态分析能力较弱）")
 	noAntiFridaExtra := fs.Bool("no-anti-frida-extra", false, "兼容性测试: 禁用额外 Frida/Gum/Gadget maps 与 fd-link 运行时探测")
 	safeScan := fs.Bool("safe-scan", false, "诊断模式: 仅加密保守识别的 .rodata 用户可见字符串")
@@ -498,7 +498,7 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 	}
 	if m.Options.ManifestDetail {
 		score -= 5
-		recommendations = append(recommendations, "manifest detail exposes protected offsets")
+		recommendations = append(recommendations, "manifest detail exposes protected offsets and is diagnostic-only")
 	}
 	if !strings.Contains(m.Protection.ControlFlow, "runtime-state-dispatch") {
 		score -= 8
@@ -525,6 +525,7 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		m.Protection.CallsiteLazyCoverage > 0 &&
 		m.Protection.DecoyCount > 0 &&
 		m.Protection.RuntimeTableEntries == expectedTableEntries &&
+		!m.Options.ManifestDetail &&
 		m.LoadMetadata.ELFHeaderSHA256 != "" &&
 		m.LoadMetadata.ProgramHeaderHash != "" &&
 		len(m.CodeSegments) > 0 &&
