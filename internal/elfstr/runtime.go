@@ -14,31 +14,34 @@ import (
 const (
 	stubEntryOff            = 0x50
 	stubLazyEntryOff        = 0x1068
-	stubHoneypotEntryOff    = 0x1598
-	stubAnchorOff           = 0x1638
-	stubStaticVAOff         = 0x1640
-	stubOrigEntryOff        = 0x1648
-	stubPageVAOff           = 0x1650
-	stubPageLenOff          = 0x1658
-	stubPayloadLenOff       = 0x1660
-	stubEntryCountOff       = 0x1668
-	stubGuardSeedOff        = 0x166c
-	stubTableSeedOff        = 0x1670
-	stubKeySeedOff          = 0x1674
-	stubParamTableAOff      = 0x1678
-	stubParamTableBOff      = 0x167c
-	stubParamKeyIndexOff    = 0x1680
-	stubParamStringPosOff   = 0x1684
-	stubParamStringIndexOff = 0x1688
-	stubGuardHashOff        = 0x168c
-	stubOrigEntryKeyOff     = 0x1690
-	stubTableOff            = 0x1698
+	stubHoneypotEntryOff    = 0x162c
+	stubAnchorOff           = 0x16c8
+	stubStaticVAOff         = 0x16d0
+	stubOrigEntryOff        = 0x16d8
+	stubPageVAOff           = 0x16e0
+	stubPageLenOff          = 0x16e8
+	stubPayloadLenOff       = 0x16f0
+	stubEntryCountOff       = 0x16f8
+	stubGuardSeedOff        = 0x16fc
+	stubTableSeedOff        = 0x1700
+	stubKeySeedOff          = 0x1704
+	stubParamTableAOff      = 0x1708
+	stubParamTableBOff      = 0x170c
+	stubParamKeyIndexOff    = 0x1710
+	stubParamStringPosOff   = 0x1714
+	stubParamStringIndexOff = 0x1718
+	stubGuardHashOff        = 0x171c
+	stubOrigEntryKeyOff     = 0x1720
+	stubTableOff            = 0x1728
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x16b0
-	stubLazyTableOff        = 0x16b8
+	stubLazyCountOff        = 0x1740
+	stubLazyHashOff         = 0x1744
+	stubLazyTableOff        = 0x1748
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1708
+	stubDataEndOff          = 0x1798
+	stubLazyHashPlaceholder = 0x89abcdef
+	lazyDispatchHashMask    = 0xa5c35a7e
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -329,10 +332,11 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 	if expectedEntries < 0 {
 		return nil, fmt.Errorf("expected lazy dispatch count must be >= 0")
 	}
-	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
+	if len(payloadRaw) <= stubLazyCountOff+4 || len(payloadRaw) <= stubLazyHashOff+4 || len(payloadRaw) <= stubLazyTableOff+8 {
 		return nil, fmt.Errorf("runtime payload too small for lazy dispatch metadata")
 	}
 	lazyCount := binary.LittleEndian.Uint32(payloadRaw[stubLazyCountOff:])
+	lazyHash := binary.LittleEndian.Uint32(payloadRaw[stubLazyHashOff:]) ^ lazyDispatchHashMask
 	if uint64(lazyCount) != uint64(expectedEntries) {
 		return nil, fmt.Errorf("lazy dispatch entry count got %d want %d", lazyCount, expectedEntries)
 	}
@@ -356,6 +360,9 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 	}
 	if tableOff+tableLen > uint64(len(payloadRaw)) {
 		return nil, fmt.Errorf("lazy dispatch table outside payload file bytes: off=%#x len=%#x filesz=%#x", tableOff, tableLen, len(payloadRaw))
+	}
+	if got := hashLazyDispatchTable(payloadRaw[tableOff:tableOff+tableLen], lazyCount); got != lazyHash {
+		return nil, fmt.Errorf("lazy dispatch table hash got %#x want %#x", got, lazyHash)
 	}
 	entries := make([]LazyDispatchEntry, 0, lazyCount)
 	for i := uint32(0); i < lazyCount; i++ {
@@ -449,6 +456,9 @@ func validateEmbeddedStubLayout() error {
 	}
 	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyCountOff:]) != 0x01234567 {
 		return fmt.Errorf("runtime stub lazy count placeholder mismatch at %#x", stubLazyCountOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyHashOff:]) != stubLazyHashPlaceholder {
+		return fmt.Errorf("runtime stub lazy hash placeholder mismatch at %#x", stubLazyHashOff)
 	}
 	if binary.LittleEndian.Uint64(assets.StrdecBlob[stubLazyTableOff:]) != 0x123456789abcdef0 {
 		return fmt.Errorf("runtime stub lazy table placeholder mismatch at %#x", stubLazyTableOff)
@@ -552,7 +562,7 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	tableLen := uint64(stubLazyEntSize * len(dispatchEntries))
 	newPayloadLen := int(tableStart + tableLen)
 
-	if int(stubLazyCountOff)+4 > len(payload) || int(stubLazyTableOff)+8 > len(payload) {
+	if int(stubLazyCountOff)+4 > len(payload) || int(stubLazyHashOff)+4 > len(payload) || int(stubLazyTableOff)+8 > len(payload) {
 		return data
 	}
 	binary.LittleEndian.PutUint32(payload[stubLazyCountOff:], uint32(len(dispatchEntries)))
@@ -564,6 +574,8 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 		off := int(tableStart) + i*stubLazyEntSize
 		encodeLazyDispatchEntry(payload[off:off+stubLazyEntSize], de, uint32(i))
 	}
+	lazyHash := hashLazyDispatchTable(payload[tableStart:tableStart+tableLen], uint32(len(dispatchEntries)))
+	binary.LittleEndian.PutUint32(payload[stubLazyHashOff:], lazyHash^lazyDispatchHashMask)
 	binary.LittleEndian.PutUint64(payload[stubPayloadLenOff:], uint64(len(payload)))
 
 	// Rebuild the data array if payload grew
@@ -645,6 +657,20 @@ func lazyDispatchMask(index, pos uint32) byte {
 	v ^= pos << 11
 	v ^= v >> 16
 	return byte(v)
+}
+
+func hashLazyDispatchTable(table []byte, count uint32) uint32 {
+	h := count ^ 0x6d2b79f5
+	for i, b := range table {
+		h += uint32(b) + uint32(i)*0x45d9f3b
+		h ^= h << 13
+		h ^= h >> 17
+		h ^= h << 5
+	}
+	if h == 0 {
+		return 0x6d2b79f5
+	}
+	return h
 }
 
 // findPayloadSegmentVA scans the ELF program headers and returns the virtual

@@ -1243,9 +1243,52 @@ strdec_lazy_entry:
     // Load dispatch table: x5=ptr, x6=count
     adr x5, strdec_lazy_count
     ldr w6, [x5]
+    adr x5, strdec_lazy_hash
+    ldr w18, [x5]
+    mov w4, #0x5a7e
+    movk w4, #0xa5c3, lsl #16
+    eor w18, w18, w4
     adr x5, strdec_lazy_table
     ldr x5, [x5]
     add x5, x5, x19
+    mov w16, w6
+    mov w4, #0x79f5
+    movk w4, #0x6d2b, lsl #16
+    eor w16, w16, w4
+    mov w3, #0
+    mov x17, x5
+.Llazy_hash_loop:
+    cmp w3, w6
+    b.hs .Llazy_hash_done
+    mov w4, #0
+.Llazy_hash_entry:
+    cmp w4, #56
+    b.hs .Llazy_hash_next
+    ldrb w7, [x17, x4]
+    mov w12, #56
+    madd w12, w3, w12, w4
+    mov w11, #0x9f3b
+    movk w11, #0x045d, lsl #16
+    madd w11, w12, w11, w7
+    add w16, w16, w11
+    eor w16, w16, w16, lsl #13
+    eor w16, w16, w16, lsr #17
+    eor w16, w16, w16, lsl #5
+    add w4, w4, #1
+    b .Llazy_hash_entry
+.Llazy_hash_next:
+    add x17, x17, #56
+    add w3, w3, #1
+    b .Llazy_hash_loop
+.Llazy_hash_done:
+    cbnz w16, .Llazy_hash_nonzero
+    mov w16, #0x79f5
+    movk w16, #0x6d2b, lsl #16
+.Llazy_hash_nonzero:
+    cmp w16, w18
+    b.eq .Llazy_hash_ok
+    brk #0x7b3
+.Llazy_hash_ok:
     mov w12, #0
     
 .Llazy_scan:
@@ -1669,6 +1712,8 @@ strdec_table:
 .balign 4
 strdec_lazy_count:
     .word 0x01234567
+strdec_lazy_hash:
+    .word 0x89abcdef
 .balign 8
 strdec_lazy_table:
     .quad 0x123456789abcdef0

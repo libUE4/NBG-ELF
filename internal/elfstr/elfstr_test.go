@@ -966,6 +966,7 @@ func TestEmbeddedRuntimeStubOffsetsAreInBounds(t *testing.T) {
 		{"payload_len", stubPayloadLenOff, 8},
 		{"table", stubTableOff, stubTableEntSize},
 		{"lazy_count", stubLazyCountOff, 4},
+		{"lazy_hash", stubLazyHashOff, 4},
 		{"lazy_table", stubLazyTableOff, stubLazyEntSize},
 	} {
 		if tc.off < 0 || tc.off+tc.n > len(assets.StrdecBlob) {
@@ -974,6 +975,9 @@ func TestEmbeddedRuntimeStubOffsetsAreInBounds(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyCountOff:]); got != 0x01234567 {
 		t.Fatalf("lazy count placeholder mismatch at %#x: got %#x", stubLazyCountOff, got)
+	}
+	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyHashOff:]); got != stubLazyHashPlaceholder {
+		t.Fatalf("lazy hash placeholder mismatch at %#x: got %#x", stubLazyHashOff, got)
 	}
 	if got := binary.LittleEndian.Uint64(assets.StrdecBlob[stubLazyTableOff:]); got != 0x123456789abcdef0 {
 		t.Fatalf("lazy table placeholder mismatch at %#x: got %#x", stubLazyTableOff, got)
@@ -1219,6 +1223,7 @@ func TestStubSymbolOffsetsMatchRuntimeConstants(t *testing.T) {
 		{"strdec_orig_entry_key", stubOrigEntryKeyOff},
 		{"strdec_table", stubTableOff},
 		{"strdec_lazy_count", stubLazyCountOff},
+		{"strdec_lazy_hash", stubLazyHashOff},
 		{"strdec_lazy_table", stubLazyTableOff},
 	} {
 		got, ok := values[tc.name]
@@ -1376,11 +1381,18 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	corruptLen := append([]byte(nil), out...)
 	tableVA := binary.LittleEndian.Uint64(corruptLen[stubLazyTableOff:])
 	base := int(tableVA - 0x100000)
+	corruptHash := append([]byte(nil), out...)
+	corruptHash[base] ^= 0xff
+	if err := validateInjectedOutputLazyDispatch(corruptHash, 1); err == nil {
+		t.Fatalf("accepted lazy dispatch table with corrupt hash")
+	}
+
 	decodeBuf := append([]byte(nil), corruptLen[base:base+stubLazyEntSize]...)
 	cryptLazyDispatchEntry(decodeBuf, 0)
 	binary.LittleEndian.PutUint32(decodeBuf[16:], 0)
 	cryptLazyDispatchEntry(decodeBuf, 0)
 	copy(corruptLen[base:base+stubLazyEntSize], decodeBuf)
+	binary.LittleEndian.PutUint32(corruptLen[stubLazyHashOff:], hashLazyDispatchTable(corruptLen[base:base+stubLazyEntSize], 1)^lazyDispatchHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptLen, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with zero length")
 	}
@@ -1391,6 +1403,7 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	decodeBuf[41] ^= 0xff
 	cryptLazyDispatchEntry(decodeBuf, 0)
 	copy(corruptTag[base:base+stubLazyEntSize], decodeBuf)
+	binary.LittleEndian.PutUint32(corruptTag[stubLazyHashOff:], hashLazyDispatchTable(corruptTag[base:base+stubLazyEntSize], 1)^lazyDispatchHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptTag, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with corrupt tag")
 	}
@@ -1401,6 +1414,7 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	decodeBuf[45] = 0xff
 	cryptLazyDispatchEntry(decodeBuf, 0)
 	copy(corruptPad[base:base+stubLazyEntSize], decodeBuf)
+	binary.LittleEndian.PutUint32(corruptPad[stubLazyHashOff:], hashLazyDispatchTable(corruptPad[base:base+stubLazyEntSize], 1)^lazyDispatchHashMask)
 	if err := validateInjectedOutputLazyDispatch(corruptPad, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
 	}
