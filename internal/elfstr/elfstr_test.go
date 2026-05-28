@@ -846,26 +846,21 @@ func TestLazyDispatchTableLayoutConstants(t *testing.T) {
 	if base < len(data) {
 		t.Fatalf("lazy table was not appended: base=%#x original_len=%#x", base, len(data))
 	}
-	if got := binary.LittleEndian.Uint64(out[base:]); got != de.TextVA {
-		t.Fatalf("TextVA got %#x want %#x", got, de.TextVA)
+	if got := binary.LittleEndian.Uint64(out[base:]); got == de.TextVA {
+		t.Fatalf("encoded lazy table leaked clear TextVA %#x", got)
 	}
-	if got := binary.LittleEndian.Uint64(out[base+8:]); got != de.StringVA {
-		t.Fatalf("StringVA got %#x want %#x", got, de.StringVA)
+	if got := binary.LittleEndian.Uint64(out[base+8:]); got == de.StringVA {
+		t.Fatalf("encoded lazy table leaked clear StringVA %#x", got)
 	}
-	if got := binary.LittleEndian.Uint32(out[base+16:]); got != de.Length {
-		t.Fatalf("Length got %#x want %#x", got, de.Length)
+	decoded, tag, pad := decodeLazyDispatchEntry(out[base:base+stubLazyEntSize], 0)
+	if decoded != de {
+		t.Fatalf("decoded lazy dispatch entry got %+v want %+v", decoded, de)
 	}
-	if got := out[base+40]; got != de.Variant {
-		t.Fatalf("Variant got %#x want %#x", got, de.Variant)
+	if tag != lazyDispatchTag(de) {
+		t.Fatalf("decoded lazy dispatch tag got %#x want %#x", tag, lazyDispatchTag(de))
 	}
-	if got, want := binary.LittleEndian.Uint32(out[base+41:]), lazyDispatchTag(de); got != want {
-		t.Fatalf("lazy dispatch tag got %#x want %#x", got, want)
-	}
-	if pad := out[base+45 : base+48]; !bytes.Equal(pad, make([]byte, 3)) {
+	if pad != ([3]byte{}) {
 		t.Fatalf("lazy dispatch padding not zero: %x", pad)
-	}
-	if got := binary.LittleEndian.Uint64(out[base+48:]); got != de.OrigTarget {
-		t.Fatalf("OrigTarget got %#x want %#x", got, de.OrigTarget)
 	}
 }
 
@@ -1381,19 +1376,31 @@ func TestValidateLazyDispatchMetadataCatchesCorruption(t *testing.T) {
 	corruptLen := append([]byte(nil), out...)
 	tableVA := binary.LittleEndian.Uint64(corruptLen[stubLazyTableOff:])
 	base := int(tableVA - 0x100000)
-	binary.LittleEndian.PutUint32(corruptLen[base+16:], 0)
+	decodeBuf := append([]byte(nil), corruptLen[base:base+stubLazyEntSize]...)
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	binary.LittleEndian.PutUint32(decodeBuf[16:], 0)
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	copy(corruptLen[base:base+stubLazyEntSize], decodeBuf)
 	if err := validateInjectedOutputLazyDispatch(corruptLen, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with zero length")
 	}
 
 	corruptTag := append([]byte(nil), out...)
-	corruptTag[base+41] ^= 0xff
+	decodeBuf = append([]byte(nil), corruptTag[base:base+stubLazyEntSize]...)
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	decodeBuf[41] ^= 0xff
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	copy(corruptTag[base:base+stubLazyEntSize], decodeBuf)
 	if err := validateInjectedOutputLazyDispatch(corruptTag, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with corrupt tag")
 	}
 
 	corruptPad := append([]byte(nil), out...)
-	corruptPad[base+45] = 0xff
+	decodeBuf = append([]byte(nil), corruptPad[base:base+stubLazyEntSize]...)
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	decodeBuf[45] = 0xff
+	cryptLazyDispatchEntry(decodeBuf, 0)
+	copy(corruptPad[base:base+stubLazyEntSize], decodeBuf)
 	if err := validateInjectedOutputLazyDispatch(corruptPad, 1); err == nil {
 		t.Fatalf("accepted lazy dispatch entry with non-zero padding")
 	}

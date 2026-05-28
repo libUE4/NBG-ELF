@@ -1215,7 +1215,7 @@ strdec_lazy_entry:
     //   x14=saltA, x15=saltB
     //   x19=ASLR (saved), x20=text_va (saved)
     //   x17, x6 scratch in loops
-    stp x1,  x2,  [sp, #-224]!
+    stp x1,  x2,  [sp, #-320]!
     stp x3,  x4,  [sp, #16]
     stp x5,  x6,  [sp, #32]
     stp x7,  x8,  [sp, #48]
@@ -1227,6 +1227,7 @@ strdec_lazy_entry:
     stp x18, x30, [sp, #144]
     str x0,        [sp, #160]
     stp x19, x20,  [sp, #176]
+    str x30,       [sp, #216]
     
     // Derive ASLR offset
     adr x19, strdec_anchor
@@ -1245,33 +1246,54 @@ strdec_lazy_entry:
     adr x5, strdec_lazy_table
     ldr x5, [x5]
     add x5, x5, x19
+    mov w12, #0
     
 .Llazy_scan:
     cbz w6, .Llazy_done
-    ldr x7, [x5]              // entry.text_va
+    mov w18, w12
+    mov w3, #0
+.Llazy_decode_scan:
+    cmp w3, #56
+    b.hs .Llazy_scan_decoded
+    ldrb w7, [x5, x3]
+    bl .Llazy_mask
+    eor w4, w4, w7
+    add x17, sp, #224
+    strb w4, [x17, x3]
+    add w3, w3, #1
+    b .Llazy_decode_scan
+.Llazy_scan_decoded:
+    ldr x7, [sp, #224]       // decoded entry.text_va
     cmp x7, x20
     b.eq .Llazy_found
     add x5, x5, #56
     sub w6, w6, #1
+    add w12, w12, #1
     b .Llazy_scan
     
 .Llazy_found:
-    // x5 = dispatch entry base; load all fields
+    // x5 = encrypted dispatch entry base; decoded copy is at sp+224.
     // Entry: text_va(8) string_va(8) len(4) key_state(4) pos_param(4) idx_param(4) saltA(4) saltB(4) variant(1) tag(4) pad(3) orig_target(8) = 56
-    ldr x16, [x5]             // text_va
-    ldr x7,  [x5, #8]         // string_va (link-time)
-    ldr w8,  [x5, #16]        // len
-    ldr w11, [x5, #20]        // key_state
-    ldr w12, [x5, #24]        // pos_param
-    ldr w13, [x5, #28]        // idx_param
-    ldr w14, [x5, #32]        // saltA
-    ldr w15, [x5, #36]        // saltB
+    ldr x16, [sp, #224]       // text_va
+    ldr x7,  [sp, #232]       // string_va (link-time)
+    ldr w8,  [sp, #240]       // len
+    ldr w11, [sp, #244]       // key_state
+    ldr w12, [sp, #248]       // pos_param
+    ldr w13, [sp, #252]       // idx_param
+    ldr w14, [sp, #256]       // saltA
+    ldr w15, [sp, #260]       // saltB
     lsr w18, w15, #16
     and w15, w15, #0xffff
     str w18, [sp, #200]
-    ldrb w9, [x5, #40]        // variant
-    ldr x10, [x5, #48]        // orig_target
-    ldur w17, [x5, #41]       // tag
+    ldrb w9, [sp, #264]       // variant
+    ldrb w17, [sp, #265]      // tag
+    ldrb w6, [sp, #266]
+    orr w17, w17, w6, lsl #8
+    ldrb w6, [sp, #267]
+    orr w17, w17, w6, lsl #16
+    ldrb w6, [sp, #268]
+    orr w17, w17, w6, lsl #24
+    ldr x10, [sp, #272]       // orig_target
     lsr x6, x16, #32
     eor w18, w16, w6
     eor w18, w18, w7
@@ -1428,21 +1450,28 @@ strdec_lazy_entry:
     b.eq .Llazy_mac_ok
     brk #0x7b2
 .Llazy_mac_ok:
-    // Save table ptr to a dedicated stack slot; blr may clobber caller-saved registers
-    str x5, [sp, #192]
+    // Save decoded parameters in scratch stack slots; blr may clobber caller-saved registers.
+    str w8, [sp, #1504]
+    str w11, [sp, #1508]
+    str w12, [sp, #1512]
+    str w13, [sp, #1516]
+    str w14, [sp, #1520]
+    str w15, [sp, #1524]
+    str w9, [sp, #1528]
+    str x7, [sp, #1536]
     blr x10
     // Restore original string pointer before re-encrypting. The callee may
     // legally clobber x0 with a return value.
     ldr x0, [sp, #160]
-    // Reload table ptr and all params (caller-saved may be clobbered by callee)
-    ldr x5, [sp, #192]
-    ldr w11, [x5, #20]        // key_state
-    ldr w12, [x5, #24]        // pos_param
-    ldr w13, [x5, #28]        // idx_param
-    ldr w14, [x5, #32]        // saltA
-    ldr w15, [x5, #36]        // saltB
-    and w15, w15, #0xffff
-    ldrb w9, [x5, #40]        // variant
+    // Reload decoded params (caller-saved may be clobbered by callee).
+    ldr w8, [sp, #1504]
+    ldr w11, [sp, #1508]
+    ldr w12, [sp, #1512]
+    ldr w13, [sp, #1516]
+    ldr w14, [sp, #1520]
+    ldr w15, [sp, #1524]
+    ldr w9, [sp, #1528]
+    ldr x7, [sp, #1536]
     mov w3, #0
 .Llazy_enc:
     cmp w3, w8
@@ -1524,7 +1553,8 @@ strdec_lazy_entry:
     
 .Llazy_done:
     ldp x19, x20, [sp, #176]
-    ldp x18, x30, [sp, #144]
+    ldr x30,      [sp, #216]
+    ldr x18,      [sp, #144]
     ldr x17,      [sp, #128]
     ldp x15, x16, [sp, #112]
     ldp x13, x14, [sp, #96]
@@ -1534,7 +1564,29 @@ strdec_lazy_entry:
     ldp x5,  x6,  [sp, #32]
     ldp x3,  x4,  [sp, #16]
     ldr x0,        [sp, #160]
-    ldp x1,  x2,  [sp], #224
+    ldp x1,  x2,  [sp], #320
+    ret
+
+.Llazy_mask:
+    mov w4, #0x9f3b
+    movk w4, #0x045d, lsl #16
+    mul w4, w18, w4
+    mov w16, #0xeb2d
+    movk w16, #0x27d4, lsl #16
+    madd w4, w3, w16, w4
+    mov w16, #0xe667
+    movk w16, #0x6a09, lsl #16
+    add w4, w4, w16
+    eor w4, w4, w4, lsl #13
+    eor w4, w4, w4, lsr #17
+    eor w4, w4, w4, lsl #5
+    add w16, w18, #1
+    mov w17, #0x79b9
+    movk w17, #0x9e37, lsl #16
+    madd w4, w16, w17, w4
+    eor w4, w4, w3, lsl #11
+    eor w4, w4, w4, lsr #16
+    and w4, w4, #0xff
     ret
 
 .balign 4

@@ -14,31 +14,31 @@ import (
 const (
 	stubEntryOff            = 0x50
 	stubLazyEntryOff        = 0x1068
-	stubHoneypotEntryOff    = 0x14d8
-	stubAnchorOff           = 0x1578
-	stubStaticVAOff         = 0x1580
-	stubOrigEntryOff        = 0x1588
-	stubPageVAOff           = 0x1590
-	stubPageLenOff          = 0x1598
-	stubPayloadLenOff       = 0x15a0
-	stubEntryCountOff       = 0x15a8
-	stubGuardSeedOff        = 0x15ac
-	stubTableSeedOff        = 0x15b0
-	stubKeySeedOff          = 0x15b4
-	stubParamTableAOff      = 0x15b8
-	stubParamTableBOff      = 0x15bc
-	stubParamKeyIndexOff    = 0x15c0
-	stubParamStringPosOff   = 0x15c4
-	stubParamStringIndexOff = 0x15c8
-	stubGuardHashOff        = 0x15cc
-	stubOrigEntryKeyOff     = 0x15d0
-	stubTableOff            = 0x15d8
+	stubHoneypotEntryOff    = 0x1598
+	stubAnchorOff           = 0x1638
+	stubStaticVAOff         = 0x1640
+	stubOrigEntryOff        = 0x1648
+	stubPageVAOff           = 0x1650
+	stubPageLenOff          = 0x1658
+	stubPayloadLenOff       = 0x1660
+	stubEntryCountOff       = 0x1668
+	stubGuardSeedOff        = 0x166c
+	stubTableSeedOff        = 0x1670
+	stubKeySeedOff          = 0x1674
+	stubParamTableAOff      = 0x1678
+	stubParamTableBOff      = 0x167c
+	stubParamKeyIndexOff    = 0x1680
+	stubParamStringPosOff   = 0x1684
+	stubParamStringIndexOff = 0x1688
+	stubGuardHashOff        = 0x168c
+	stubOrigEntryKeyOff     = 0x1690
+	stubTableOff            = 0x1698
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x15f0
-	stubLazyTableOff        = 0x15f8
+	stubLazyCountOff        = 0x16b0
+	stubLazyTableOff        = 0x16b8
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1648
+	stubDataEndOff          = 0x1708
 
 	ptLoad     = uint32(1)
 	ptNote     = uint32(4)
@@ -360,45 +360,23 @@ func validateLazyDispatchMetadata(payloadRaw []byte, payloadVA, declaredLen uint
 	entries := make([]LazyDispatchEntry, 0, lazyCount)
 	for i := uint32(0); i < lazyCount; i++ {
 		off := int(tableOff) + int(i)*stubLazyEntSize
-		textVA := binary.LittleEndian.Uint64(payloadRaw[off:])
-		stringVA := binary.LittleEndian.Uint64(payloadRaw[off+8:])
-		length := binary.LittleEndian.Uint32(payloadRaw[off+16:])
-		keyState := binary.LittleEndian.Uint32(payloadRaw[off+20:])
-		posParam := binary.LittleEndian.Uint32(payloadRaw[off+24:])
-		idxParam := binary.LittleEndian.Uint32(payloadRaw[off+28:])
-		saltA := binary.LittleEndian.Uint32(payloadRaw[off+32:])
-		saltB := binary.LittleEndian.Uint32(payloadRaw[off+36:])
-		variant := payloadRaw[off+40]
-		tag := binary.LittleEndian.Uint32(payloadRaw[off+41:])
-		origTarget := binary.LittleEndian.Uint64(payloadRaw[off+48:])
-		if textVA == 0 {
+		de, tag, pad := decodeLazyDispatchEntry(payloadRaw[off:off+stubLazyEntSize], i)
+		if de.TextVA == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty text VA", i)
 		}
-		if stringVA == 0 {
+		if de.StringVA == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty string VA", i)
 		}
-		if length == 0 {
+		if de.Length == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty length", i)
 		}
-		if origTarget == 0 {
+		if de.OrigTarget == 0 {
 			return nil, fmt.Errorf("lazy dispatch entry %d has empty original target", i)
-		}
-		de := LazyDispatchEntry{
-			TextVA:     textVA,
-			StringVA:   stringVA,
-			Length:     length,
-			KeyState:   keyState,
-			PosParam:   posParam,
-			IdxParam:   idxParam,
-			SaltA:      saltA,
-			SaltB:      saltB,
-			Variant:    variant,
-			OrigTarget: origTarget,
 		}
 		if want := lazyDispatchTag(de); tag != want {
 			return nil, fmt.Errorf("lazy dispatch entry %d tag mismatch: got %#x want %#x", i, tag, want)
 		}
-		for _, b := range payloadRaw[off+45 : off+48] {
+		for _, b := range pad {
 			if b != 0 {
 				return nil, fmt.Errorf("lazy dispatch entry %d padding is not zero", i)
 			}
@@ -584,20 +562,7 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	}
 	for i, de := range dispatchEntries {
 		off := int(tableStart) + i*stubLazyEntSize
-		binary.LittleEndian.PutUint64(payload[off:], de.TextVA)
-		binary.LittleEndian.PutUint64(payload[off+8:], de.StringVA)
-		binary.LittleEndian.PutUint32(payload[off+16:], de.Length)
-		binary.LittleEndian.PutUint32(payload[off+20:], de.KeyState)
-		binary.LittleEndian.PutUint32(payload[off+24:], de.PosParam)
-		binary.LittleEndian.PutUint32(payload[off+28:], de.IdxParam)
-		binary.LittleEndian.PutUint32(payload[off+32:], de.SaltA)
-		binary.LittleEndian.PutUint32(payload[off+36:], de.SaltB)
-		payload[off+40] = de.Variant
-		binary.LittleEndian.PutUint32(payload[off+41:], lazyDispatchTag(de))
-		for j := off + 45; j < off+48; j++ {
-			payload[j] = 0
-		}
-		binary.LittleEndian.PutUint64(payload[off+48:], de.OrigTarget)
+		encodeLazyDispatchEntry(payload[off:off+stubLazyEntSize], de, uint32(i))
 	}
 	binary.LittleEndian.PutUint64(payload[stubPayloadLenOff:], uint64(len(payload)))
 
@@ -625,6 +590,61 @@ func appendLazyDispatchTable(data []byte, dispatchEntries []LazyDispatchEntry, p
 	// Payload didn't grow, write back
 	copy(data[payloadPh.Off:payloadPh.Off+uint64(len(payload))], payload)
 	return data
+}
+
+func encodeLazyDispatchEntry(dst []byte, de LazyDispatchEntry, index uint32) {
+	if len(dst) < stubLazyEntSize {
+		return
+	}
+	var plain [stubLazyEntSize]byte
+	binary.LittleEndian.PutUint64(plain[0:], de.TextVA)
+	binary.LittleEndian.PutUint64(plain[8:], de.StringVA)
+	binary.LittleEndian.PutUint32(plain[16:], de.Length)
+	binary.LittleEndian.PutUint32(plain[20:], de.KeyState)
+	binary.LittleEndian.PutUint32(plain[24:], de.PosParam)
+	binary.LittleEndian.PutUint32(plain[28:], de.IdxParam)
+	binary.LittleEndian.PutUint32(plain[32:], de.SaltA)
+	binary.LittleEndian.PutUint32(plain[36:], de.SaltB)
+	plain[40] = de.Variant
+	binary.LittleEndian.PutUint32(plain[41:], lazyDispatchTag(de))
+	binary.LittleEndian.PutUint64(plain[48:], de.OrigTarget)
+	copy(dst, plain[:])
+	cryptLazyDispatchEntry(dst[:stubLazyEntSize], index)
+}
+
+func decodeLazyDispatchEntry(src []byte, index uint32) (LazyDispatchEntry, uint32, [3]byte) {
+	var raw [stubLazyEntSize]byte
+	copy(raw[:], src[:stubLazyEntSize])
+	cryptLazyDispatchEntry(raw[:], index)
+	return LazyDispatchEntry{
+		TextVA:     binary.LittleEndian.Uint64(raw[0:]),
+		StringVA:   binary.LittleEndian.Uint64(raw[8:]),
+		Length:     binary.LittleEndian.Uint32(raw[16:]),
+		KeyState:   binary.LittleEndian.Uint32(raw[20:]),
+		PosParam:   binary.LittleEndian.Uint32(raw[24:]),
+		IdxParam:   binary.LittleEndian.Uint32(raw[28:]),
+		SaltA:      binary.LittleEndian.Uint32(raw[32:]),
+		SaltB:      binary.LittleEndian.Uint32(raw[36:]),
+		Variant:    raw[40],
+		OrigTarget: binary.LittleEndian.Uint64(raw[48:]),
+	}, binary.LittleEndian.Uint32(raw[41:]), [3]byte{raw[45], raw[46], raw[47]}
+}
+
+func cryptLazyDispatchEntry(buf []byte, index uint32) {
+	for i := 0; i < stubLazyEntSize; i++ {
+		buf[i] ^= lazyDispatchMask(index, uint32(i))
+	}
+}
+
+func lazyDispatchMask(index, pos uint32) byte {
+	v := index*0x45d9f3b + pos*0x27d4eb2d + 0x6a09e667
+	v ^= v << 13
+	v ^= v >> 17
+	v ^= v << 5
+	v += (index + 1) * 0x9e3779b9
+	v ^= pos << 11
+	v ^= v >> 16
+	return byte(v)
 }
 
 // findPayloadSegmentVA scans the ELF program headers and returns the virtual

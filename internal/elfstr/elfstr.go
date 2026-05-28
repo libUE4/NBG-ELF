@@ -322,7 +322,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	lazyCoverage := callsiteCoveragePercent(callsiteSelected, len(callsiteCandidates))
 	runtimeTable := "encrypted-per-entry-row-resealed"
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
-		runtimeTable += "; lazy-dispatch-table-randomized"
+		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded"
 	}
 	report := ProtectionReport{
 		Preset:              effectivePreset(opts.Preset),
