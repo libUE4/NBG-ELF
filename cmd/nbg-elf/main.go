@@ -267,10 +267,11 @@ type auditFeatures struct {
 }
 
 type auditSummary struct {
-	Grade           string   `json:"grade"`
-	Score           int      `json:"score"`
-	Blockers        []string `json:"blockers,omitempty"`
-	Recommendations []string `json:"recommendations,omitempty"`
+	Grade              string   `json:"grade"`
+	Score              int      `json:"score"`
+	Blockers           []string `json:"blockers,omitempty"`
+	CommercialBlockers []string `json:"commercial_blockers,omitempty"`
+	Recommendations    []string `json:"recommendations,omitempty"`
 }
 
 type auditCheck struct {
@@ -505,6 +506,7 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		recommendations = append(recommendations, "runtime state dispatch not enabled")
 	}
 	expectedTableEntries := m.EntryCount + m.Protection.DecoyCount
+	commercialBlockers := commercialReadyBlockers(audit, m, expectedTableEntries)
 	if m.Protection.DecoyCount == 0 || m.Protection.RuntimeTableEntries != expectedTableEntries {
 		score -= 10
 		recommendations = append(recommendations, "runtime table decoy accounting is incomplete")
@@ -558,11 +560,43 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		}
 	}
 	return auditSummary{
-		Grade:           grade,
-		Score:           score,
-		Blockers:        blockers,
-		Recommendations: recommendations,
+		Grade:              grade,
+		Score:              score,
+		Blockers:           blockers,
+		CommercialBlockers: commercialBlockers,
+		Recommendations:    recommendations,
 	}
+}
+
+func commercialReadyBlockers(audit manifestAudit, m *elfstr.Manifest, expectedTableEntries int) []string {
+	var out []string
+	if m.Report.Preset != elfstr.PresetAggressive {
+		out = append(out, "preset must be aggressive")
+	}
+	if m.Protection.CallsiteMode != "aarch64-lazy-decrypt-patch" || m.Protection.CallsiteLazySelected == 0 || m.Protection.CallsiteLazyCoverage == 0 {
+		out = append(out, "patched lazy callsites must be present")
+	}
+	if m.Protection.DecoyCount == 0 || m.Protection.RuntimeTableEntries != expectedTableEntries {
+		out = append(out, "runtime table decoy accounting must match manifest entries")
+	}
+	if m.Options.ManifestDetail {
+		out = append(out, "manifest-detail must be disabled")
+	}
+	if m.LoadMetadata.ELFHeaderSHA256 == "" || m.LoadMetadata.ProgramHeaderHash == "" {
+		out = append(out, "load metadata seals are required")
+	}
+	if len(m.CodeSegments) == 0 {
+		out = append(out, "code segment seals are required")
+	}
+	if m.ProtectedSlots.SHA256 == "" || m.ProtectedSlots.Count != m.EntryCount {
+		out = append(out, "protected slot seals must cover every entry")
+	}
+	for _, check := range []string{"runtime_payload", "load_metadata", "code_segments", "protected_slots", "runtime_table", "runtime_dispatch"} {
+		if !auditHasOKCheck(audit, check) {
+			out = append(out, check+" audit must pass")
+		}
+	}
+	return out
 }
 
 func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
@@ -578,6 +612,9 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	fmt.Printf("审计评分: %s score=%d\n", audit.Summary.Grade, audit.Summary.Score)
 	for _, blocker := range audit.Summary.Blockers {
 		fmt.Printf("阻断项: %s\n", blocker)
+	}
+	for _, blocker := range audit.Summary.CommercialBlockers {
+		fmt.Printf("商业等级阻断项: %s\n", blocker)
 	}
 	for _, recommendation := range audit.Summary.Recommendations {
 		fmt.Printf("建议: %s\n", recommendation)

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nbg-elf/internal/elfstr"
@@ -330,6 +331,9 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 	if len(summary.Blockers) != 0 {
 		t.Fatalf("unexpected blockers: %+v", summary.Blockers)
 	}
+	if len(summary.CommercialBlockers) != 0 {
+		t.Fatalf("unexpected commercial blockers: %+v", summary.CommercialBlockers)
+	}
 }
 
 func TestBuildAuditSummaryBlocksManifestDetailForCommercialReady(t *testing.T) {
@@ -388,6 +392,9 @@ func TestBuildAuditSummaryBlocksManifestDetailForCommercialReady(t *testing.T) {
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("manifest-detail summary should not be commercial-ready: %+v", summary)
+	}
+	if !hasSummaryItem(summary.CommercialBlockers, "manifest-detail") {
+		t.Fatalf("expected manifest-detail commercial blocker: %+v", summary.CommercialBlockers)
 	}
 }
 
@@ -494,6 +501,9 @@ func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *test
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without decoy evidence should not be commercial-ready: %+v", summary)
 	}
+	if !hasSummaryItem(summary.CommercialBlockers, "decoy") {
+		t.Fatalf("expected decoy commercial blocker: %+v", summary.CommercialBlockers)
+	}
 }
 
 func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.T) {
@@ -542,6 +552,9 @@ func TestBuildAuditSummaryRequiresCodeSegmentSealsForCommercialReady(t *testing.
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without code segment seals should not be commercial-ready: %+v", summary)
+	}
+	if !hasSummaryItem(summary.CommercialBlockers, "code segment") {
+		t.Fatalf("expected code segment commercial blocker: %+v", summary.CommercialBlockers)
 	}
 }
 
@@ -595,6 +608,9 @@ func TestBuildAuditSummaryRequiresLoadMetadataSealsForCommercialReady(t *testing
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without load metadata seals should not be commercial-ready: %+v", summary)
 	}
+	if !hasSummaryItem(summary.CommercialBlockers, "load metadata") {
+		t.Fatalf("expected load metadata commercial blocker: %+v", summary.CommercialBlockers)
+	}
 }
 
 func TestBuildAuditSummaryRequiresProtectedSlotSealsForCommercialReady(t *testing.T) {
@@ -645,6 +661,9 @@ func TestBuildAuditSummaryRequiresProtectedSlotSealsForCommercialReady(t *testin
 	summary := buildAuditSummary(audit, m)
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("summary without protected slot seals should not be commercial-ready: %+v", summary)
+	}
+	if !hasSummaryItem(summary.CommercialBlockers, "protected slot") {
+		t.Fatalf("expected protected slot commercial blocker: %+v", summary.CommercialBlockers)
 	}
 }
 
@@ -699,6 +718,18 @@ func TestBuildAuditSummaryRequiresPatchedLazyCallsitesForCommercialReady(t *test
 	if summary.Grade == "commercial-ready" {
 		t.Fatalf("dry-run summary should not be commercial-ready: %+v", summary)
 	}
+	if !hasSummaryItem(summary.CommercialBlockers, "patched lazy callsites") {
+		t.Fatalf("expected lazy callsite commercial blocker: %+v", summary.CommercialBlockers)
+	}
+}
+
+func hasSummaryItem(items []string, substr string) bool {
+	for _, item := range items {
+		if strings.Contains(item, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEnforceMinimumAuditGrade(t *testing.T) {
