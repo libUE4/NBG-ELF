@@ -1123,6 +1123,38 @@ strdec_entry:
     b 3b
 
 4:
+    cbz w19, .Lmain_content_mac_ok
+    mov w3, #0
+    mov w5, w2
+    eor w5, w5, w7
+    lsr x8, x7, #32
+    eor w5, w5, w8
+    eor w5, w5, w1
+    eor w5, w5, w15
+    ror w8, w17, #21
+    eor w5, w5, w8
+    eor w5, w5, w16
+    mov w8, #0x79b9
+    movk w8, #0x9e37, lsl #16
+    eor w5, w5, w8
+.Lmain_content_mac:
+    cmp w3, w1
+    b.hs .Lmain_content_mac_done
+    ldrb w4, [x0, x3]
+    add w8, w4, w3
+    eor w5, w5, w8
+    eor w5, w5, w5, lsl #13
+    eor w5, w5, w5, lsr #17
+    eor w5, w5, w5, lsl #5
+    add w3, w3, #1
+    b .Lmain_content_mac
+.Lmain_content_mac_done:
+    eor w8, w5, w5, lsr #16
+    and w8, w8, #0xffff
+    cmp w8, w19
+    b.eq .Lmain_content_mac_ok
+    brk #0x7a8
+.Lmain_content_mac_ok:
     // Re-seal only the runtime table entry; each row is readable for the
     // shortest possible window before the next entry is processed.
     mov w3, #0
@@ -1262,6 +1294,7 @@ strdec_lazy_entry:
     str x17,       [sp, #128]
     stp x18, x30, [sp, #144]
     str x0,        [sp, #160]
+    str x0,        [sp, #168]
     stp x19, x20,  [sp, #176]
     str x30,       [sp, #216]
     
@@ -1328,7 +1361,7 @@ strdec_lazy_entry:
     mov w12, #0
     
 .Llazy_scan:
-    cbz w6, .Llazy_done
+    cbz w6, .Llazy_return
     mov w18, w12
     mov w3, #0
 .Llazy_decode_scan:
@@ -1361,9 +1394,6 @@ strdec_lazy_entry:
     ldr w13, [sp, #252]       // idx_param
     ldr w14, [sp, #256]       // saltA
     ldr w15, [sp, #260]       // saltB
-    lsr w18, w15, #16
-    and w15, w15, #0xffff
-    str w18, [sp, #200]
     ldrb w9, [sp, #264]       // variant
     ldrb w17, [sp, #265]      // tag
     ldrb w6, [sp, #266]
@@ -1411,9 +1441,30 @@ strdec_lazy_entry:
     b.eq .Llazy_tag_ok
     brk #0x7b1
 .Llazy_tag_ok:
+    lsr w18, w15, #16
+    and w15, w15, #0xffff
+    str w18, [sp, #200]
+    str w11, [sp, #204]
     add x10, x10, x19         // runtime orig_target
     
-    ldr x0, [sp, #160]        // runtime string VA
+    add x0, x7, x19           // runtime entry-base string VA
+
+    // The main runtime restores string pages to RX before entering the program.
+    // Lazy decrypt needs a short RW window for the exact page span it touches.
+    str w8, [sp, #208]
+    lsr x16, x0, #12
+    lsl x16, x16, #12
+    sub x17, x0, x16
+    add x1, x17, x8
+    add x1, x1, #4095
+    lsr x1, x1, #12
+    lsl x1, x1, #12
+    mov x0, x16
+    mov x2, #3
+    mov x8, #226
+    svc #0
+    add x0, x7, x19
+    ldr w8, [sp, #208]
     
     // Decrypt string: x8=len, x11=state, x12=pP, x13=iP, x14=sA, x15=sB, x9=v
     mov w3, #0
@@ -1499,7 +1550,7 @@ strdec_lazy_entry:
     ldr w18, [sp, #200]
     cbz w18, .Llazy_mac_ok
     mov w3, #0
-    mov w16, w11
+    ldr w16, [sp, #204]
     eor w16, w16, w7
     lsr x17, x7, #32
     eor w16, w16, w17
@@ -1529,32 +1580,50 @@ strdec_lazy_entry:
     b.eq .Llazy_mac_ok
     brk #0x7b2
 .Llazy_mac_ok:
-    // Save decoded parameters in scratch stack slots; blr may clobber caller-saved registers.
-    str w8, [sp, #1504]
-    str w11, [sp, #1508]
-    str w12, [sp, #1512]
-    str w13, [sp, #1516]
-    str w14, [sp, #1520]
-    str w15, [sp, #1524]
-    str w9, [sp, #1528]
-    str x7, [sp, #1536]
-    blr x10
+    // Save decoded parameters in this trampoline frame; blr may clobber caller-saved registers.
+    str x10, [sp, #192]
+    ldr w6,  [sp, #204]
+    str w8,  [sp, #280]
+    str w6,  [sp, #284]
+    str w12, [sp, #288]
+    str w13, [sp, #292]
+    str w14, [sp, #296]
+    str w15, [sp, #300]
+    str w9,  [sp, #304]
+    str x7,  [sp, #312]
+    // Present the original call ABI to the protected function.
+    ldr x0,        [sp, #160]
+    ldp x1,  x2,  [sp, #0]
+    ldp x3,  x4,  [sp, #16]
+    ldp x5,  x6,  [sp, #32]
+    ldp x7,  x8,  [sp, #48]
+    ldp x9,  x10, [sp, #64]
+    ldp x11, x12, [sp, #80]
+    ldp x13, x14, [sp, #96]
+    ldp x15, x16, [sp, #112]
+    ldr x17,      [sp, #128]
+    ldr x18,      [sp, #144]
+    ldr x16,      [sp, #192]
+    str x19,      [sp, #192]
+    blr x16
+    str x0, [sp, #168]
     // Restore original string pointer before re-encrypting. The callee may
     // legally clobber x0 with a return value.
-    ldr x0, [sp, #160]
+    ldr x19,      [sp, #192]
     // Reload decoded params (caller-saved may be clobbered by callee).
-    ldr w8, [sp, #1504]
-    ldr w11, [sp, #1508]
-    ldr w12, [sp, #1512]
-    ldr w13, [sp, #1516]
-    ldr w14, [sp, #1520]
-    ldr w15, [sp, #1524]
-    ldr w9, [sp, #1528]
-    ldr x7, [sp, #1536]
+    ldr w8,  [sp, #280]
+    ldr w11, [sp, #284]
+    ldr w12, [sp, #288]
+    ldr w13, [sp, #292]
+    ldr w14, [sp, #296]
+    ldr w15, [sp, #300]
+    ldr w9,  [sp, #304]
+    ldr x7,  [sp, #312]
+    add x0, x7, x19
     mov w3, #0
 .Llazy_enc:
     cmp w3, w8
-    b.hs .Llazy_done
+    b.hs .Llazy_reseal
     ldrb w4, [x0, x3]
     add w11, w11, w12
     add w11, w11, w15
@@ -1630,7 +1699,19 @@ strdec_lazy_entry:
     add w3, w3, #1
     b .Llazy_enc
     
-.Llazy_done:
+.Llazy_reseal:
+    lsr x16, x0, #12
+    lsl x16, x16, #12
+    sub x17, x0, x16
+    add x1, x17, x8
+    add x1, x1, #4095
+    lsr x1, x1, #12
+    lsl x1, x1, #12
+    mov x0, x16
+    mov x2, #5
+    mov x8, #226
+    svc #0
+.Llazy_return:
     ldp x19, x20, [sp, #176]
     ldr x30,      [sp, #216]
     ldr x18,      [sp, #144]
@@ -1642,7 +1723,7 @@ strdec_lazy_entry:
     ldp x7,  x8,  [sp, #48]
     ldp x5,  x6,  [sp, #32]
     ldp x3,  x4,  [sp, #16]
-    ldr x0,        [sp, #160]
+    ldr x0,        [sp, #168]
     ldp x1,  x2,  [sp], #320
     ret
 

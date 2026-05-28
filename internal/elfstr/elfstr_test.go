@@ -356,6 +356,32 @@ func TestRuntimeContentTagsSkipOverlappingEntries(t *testing.T) {
 	}
 }
 
+func TestAllRuntimeContentTagVAsSkipsDecoys(t *testing.T) {
+	entries := []Entry{
+		{Section: ".rodata", VAddr: 0x1000, Length: 8},
+		{Section: "<decoy>", VAddr: 0x2000, Length: 8},
+		{Section: ".data", VAddr: 0x3000, Length: 0},
+	}
+	got := allRuntimeContentTagVAs(entries)
+	if _, ok := got[0x1000]; !ok || len(got) != 1 {
+		t.Fatalf("content tag VAs got %#v want only real non-empty string", got)
+	}
+}
+
+func TestClearRuntimeContentTagsForLazyStrings(t *testing.T) {
+	entries := []Entry{
+		{VAddr: 0x1000, ContentTag: 0x1111},
+		{VAddr: 0x2000, ContentTag: 0x2222},
+	}
+	got := clearRuntimeContentTags(entries, map[uint64]struct{}{0x2000: {}})
+	if got[0].ContentTag != 0x1111 || got[1].ContentTag != 0 {
+		t.Fatalf("cleared tags got %#v", got)
+	}
+	if entries[1].ContentTag != 0x2222 {
+		t.Fatalf("clearRuntimeContentTags mutated input")
+	}
+}
+
 func equalEntriesForTest(a, b []Entry) bool {
 	if len(a) != len(b) {
 		return false
@@ -927,7 +953,9 @@ func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
 		SaltA:        0x10,
 		SaltB:        0x20,
 		Variant:      2,
+		Plain:        "30313233343536373839616263646566",
 	}}
+	entries[0].ContentTag = runtimeContentTag(entries[0])
 	candidates := []CallsiteCandidate{{
 		TextVAddr:   0x1000,
 		CallTarget:  0x2000,
@@ -940,6 +968,13 @@ func TestBuildLazyDispatchEntriesMatchesInteriorStringVA(t *testing.T) {
 	}
 	if dispatch[0].StringVA != 0x5000 || dispatch[0].Length != 16 {
 		t.Fatalf("dispatch entry = %+v", dispatch[0])
+	}
+	wantTag := runtimeStateContentTag(dispatch[0].KeyState, dispatch[0].StringVA, dispatch[0].Length, dispatch[0].SaltA, entries[0].SaltB, dispatch[0].Variant, decodeEntryPlainForTag(entries[0].Plain))
+	if got := uint16(dispatch[0].SaltB >> 16); got != wantTag {
+		t.Fatalf("lazy content tag got %#x want state-based %#x", got, wantTag)
+	}
+	if got := uint16(dispatch[0].SaltB >> 16); got == entries[0].ContentTag {
+		t.Fatalf("lazy content tag unexpectedly reused main runtime tag %#x", got)
 	}
 	lazyVAs := lazyDispatchStringEntryVAs(dispatch, entries)
 	if _, ok := lazyVAs[0x5000]; !ok || len(lazyVAs) != 1 {

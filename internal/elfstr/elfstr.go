@@ -214,6 +214,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	runtimeEntries = withRuntimeContentTags(runtimeEntries, allRuntimeContentTagVAs(runtimeEntries))
 	callsiteCandidates, err := discoverAArch64Callsites(raw, realRuntimeEntries(runtimeEntries))
 	if err != nil {
 		return nil, err
@@ -233,10 +234,10 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	lazyStringVAs := make(map[uint64]struct{})
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
 		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
-		runtimeEntries = withRuntimeContentTags(runtimeEntries, lazyStringVAs)
 		dispatchEntries = buildLazyDispatchEntries(selectedLazyCandidates, runtimeEntries, meta)
 		callsiteSelected = len(dispatchEntries)
 		lazyStringVAs = lazyDispatchStringEntryVAs(dispatchEntries, runtimeEntries)
+		runtimeEntries = clearRuntimeContentTags(runtimeEntries, lazyStringVAs)
 	}
 	for _, e := range runtimeEntries {
 		if e.Length == 0 || e.Section == "<decoy>" {

@@ -13,42 +13,42 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0x10e4
-	stubHoneypotEntryOff    = 0x16a8
-	stubAnchorOff           = 0x1748
-	stubStaticVAOff         = 0x1750
-	stubOrigEntryOff        = 0x1758
-	stubPageVAOff           = 0x1760
-	stubPageLenOff          = 0x1768
-	stubPayloadLenOff       = 0x1770
-	stubEntryCountOff       = 0x1778
-	stubGuardSeedOff        = 0x177c
-	stubTableSeedOff        = 0x1780
-	stubKeySeedOff          = 0x1784
-	stubParamTableAOff      = 0x1788
-	stubParamTableBOff      = 0x178c
-	stubParamKeyIndexOff    = 0x1790
-	stubParamStringPosOff   = 0x1794
-	stubParamStringIndexOff = 0x1798
-	stubGuardHashOff        = 0x179c
-	stubOrigEntryKeyOff     = 0x17a0
-	stubRuntimeTableHashOff = 0x17a8
-	stubRuntimeTableSeedOff = 0x17ac
-	stubRuntimeTableMaskOff = 0x17b0
-	stubTableOff            = 0x17b8
+	stubLazyEntryOff        = 0x1158
+	stubHoneypotEntryOff    = 0x17cc
+	stubAnchorOff           = 0x1868
+	stubStaticVAOff         = 0x1870
+	stubOrigEntryOff        = 0x1878
+	stubPageVAOff           = 0x1880
+	stubPageLenOff          = 0x1888
+	stubPayloadLenOff       = 0x1890
+	stubEntryCountOff       = 0x1898
+	stubGuardSeedOff        = 0x189c
+	stubTableSeedOff        = 0x18a0
+	stubKeySeedOff          = 0x18a4
+	stubParamTableAOff      = 0x18a8
+	stubParamTableBOff      = 0x18ac
+	stubParamKeyIndexOff    = 0x18b0
+	stubParamStringPosOff   = 0x18b4
+	stubParamStringIndexOff = 0x18b8
+	stubGuardHashOff        = 0x18bc
+	stubOrigEntryKeyOff     = 0x18c0
+	stubRuntimeTableHashOff = 0x18c8
+	stubRuntimeTableSeedOff = 0x18cc
+	stubRuntimeTableMaskOff = 0x18d0
+	stubTableOff            = 0x18d8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x17d0
-	stubLazyHashOff         = 0x17d4
-	stubLazyHashSeedOff     = 0x17d8
-	stubLazyHashMaskOff     = 0x17dc
-	stubLazyMaskIndexMulOff = 0x17e0
-	stubLazyMaskPosMulOff   = 0x17e4
-	stubLazyMaskBaseOff     = 0x17e8
-	stubLazyMaskRoundMulOff = 0x17ec
-	stubLazyTableOff        = 0x17f0
+	stubLazyCountOff        = 0x18f0
+	stubLazyHashOff         = 0x18f4
+	stubLazyHashSeedOff     = 0x18f8
+	stubLazyHashMaskOff     = 0x18fc
+	stubLazyMaskIndexMulOff = 0x1900
+	stubLazyMaskPosMulOff   = 0x1904
+	stubLazyMaskBaseOff     = 0x1908
+	stubLazyMaskRoundMulOff = 0x190c
+	stubLazyTableOff        = 0x1910
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x1840
+	stubDataEndOff          = 0x1960
 	stubRuntimeTableHash    = 0x13579bdf
 	stubRuntimeTableSeed    = 0x2468ace1
 	stubRuntimeTableMask    = 0xf0e1d2c3
@@ -594,6 +594,10 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			idxParam = 0x7b
 		}
 		state := key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ (uint32(e.RuntimeIndex) * idxParam) ^ posParam ^ e.SaltA ^ e.SaltB ^ uint32(e.Variant&0x0f)
+		contentTag := runtimeStateContentTag(state, e.VAddr, uint32(e.Length), e.SaltA, e.SaltB, e.Variant, decodeEntryPlainForTag(e.Plain))
+		if contentTag == 0 {
+			contentTag = 1
+		}
 		out = append(out, LazyDispatchEntry{
 			TextVA:     c.TextVAddr,
 			StringVA:   e.VAddr,
@@ -602,7 +606,7 @@ func buildLazyDispatchEntries(candidates []CallsiteCandidate, entries []Entry, m
 			PosParam:   posParam,
 			IdxParam:   idxParam,
 			SaltA:      e.SaltA,
-			SaltB:      e.SaltB | (uint32(e.ContentTag) << 16),
+			SaltB:      e.SaltB | (uint32(contentTag) << 16),
 			Variant:    e.Variant & 0x0f,
 			OrigTarget: c.CallTarget,
 		})
@@ -941,6 +945,15 @@ func runtimeEntryTag(key uint32, va uint64, length, index, keySeed, keyIndexPara
 func runtimeContentTag(e Entry) uint16 {
 	tag := e.Key ^ uint32(e.VAddr) ^ uint32(e.VAddr>>32) ^ uint32(e.Length) ^ e.SaltA ^ bitsRotateLeft32(e.SaltB&0xffff, 11) ^ uint32(e.Variant&0x0f) ^ 0x9e3779b9
 	plain := decodeEntryPlainForTag(e.Plain)
+	return runtimePlainContentTag(tag, plain)
+}
+
+func runtimeStateContentTag(state uint32, va uint64, length, saltA, saltB uint32, variant uint8, plain []byte) uint16 {
+	tag := state ^ uint32(va) ^ uint32(va>>32) ^ length ^ saltA ^ bitsRotateLeft32(saltB&0xffff, 11) ^ uint32(variant&0x0f) ^ 0x9e3779b9
+	return runtimePlainContentTag(tag, plain)
+}
+
+func runtimePlainContentTag(tag uint32, plain []byte) uint16 {
 	for pos, b := range plain {
 		tag ^= uint32(b) + uint32(pos)
 		tag = mixXorShift32(tag)
@@ -1173,6 +1186,30 @@ func withRuntimeContentTags(entries []Entry, enabledVAs map[uint64]struct{}) []E
 			tag = 1
 		}
 		out[i].ContentTag = tag
+	}
+	return out
+}
+
+func allRuntimeContentTagVAs(entries []Entry) map[uint64]struct{} {
+	out := make(map[uint64]struct{})
+	for _, e := range entries {
+		if e.Length <= 0 || e.Section == "<decoy>" {
+			continue
+		}
+		out[e.VAddr] = struct{}{}
+	}
+	return out
+}
+
+func clearRuntimeContentTags(entries []Entry, disabledVAs map[uint64]struct{}) []Entry {
+	if len(disabledVAs) == 0 {
+		return entries
+	}
+	out := append([]Entry(nil), entries...)
+	for i := range out {
+		if _, disabled := disabledVAs[out[i].VAddr]; disabled {
+			out[i].ContentTag = 0
+		}
 	}
 	return out
 }
