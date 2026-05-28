@@ -968,13 +968,17 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 			FailurePolicy:    "safe-exit",
 		},
 		Report: ProtectionReport{
-			Preset:             PresetAggressive,
-			ControlFlowLevel:   3,
-			FailurePolicy:      "safe-exit",
-			CallsiteCandidates: 5,
-			CallsiteSelected:   2,
-			CallsiteSkipped:    3,
-			CallsiteLimit:      2,
+			Preset:              PresetAggressive,
+			ControlFlowLevel:    3,
+			FailurePolicy:       "safe-exit",
+			RuntimeTableEntries: 10,
+			RuntimeDecoys:       3,
+			RuntimeDecoyRatio:   0.3,
+			LazyCoveragePercent: 40,
+			CallsiteCandidates:  5,
+			CallsiteSelected:    2,
+			CallsiteSkipped:     3,
+			CallsiteLimit:       2,
 		},
 		Options: ManifestOptions{
 			Preset:           PresetAggressive,
@@ -1024,6 +1028,12 @@ func TestManifestIncludesOptionsAndRuntimeStubInfo(t *testing.T) {
 	if _, ok := decoded["report"]; !ok {
 		t.Fatalf("manifest json missing report: %s", raw)
 	}
+	report := decoded["report"].(map[string]any)
+	for _, key := range []string{"runtime_table_entries", "runtime_decoys", "runtime_decoy_ratio", "lazy_coverage_percent"} {
+		if _, ok := report[key]; !ok {
+			t.Fatalf("manifest report missing %s: %s", key, raw)
+		}
+	}
 }
 
 func TestValidateManifestRuntimeStubCatchesMetadataMismatch(t *testing.T) {
@@ -1056,6 +1066,38 @@ func TestManifestSelfHashDetectsMetadataTamper(t *testing.T) {
 	m.EntryCount++
 	if err := ValidateManifestSelfHash(m); err == nil {
 		t.Fatalf("expected manifest self hash mismatch after metadata tamper")
+	}
+}
+
+func TestValidateManifestRuntimeTableProfileCatchesMetadataMismatch(t *testing.T) {
+	m := &Manifest{
+		EntryCount: 4,
+		Report: ProtectionReport{
+			RuntimeTableEntries: 6,
+			RuntimeDecoys:       2,
+			RuntimeDecoyRatio:   runtimeDecoyRatio(2, 6),
+			LazyCoveragePercent: 50,
+		},
+		Protection: ProtectionProfile{
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             runtimeDecoyRatio(2, 6),
+			CallsiteLazyCandidates: 4,
+			CallsiteLazySelected:   2,
+			CallsiteLazyCoverage:   50,
+		},
+	}
+	if err := ValidateManifestRuntimeTableProfile(m); err != nil {
+		t.Fatalf("validate runtime table profile: %v", err)
+	}
+	m.Protection.RuntimeTableEntries++
+	if err := ValidateManifestRuntimeTableProfile(m); err == nil {
+		t.Fatalf("expected runtime table entry count mismatch")
+	}
+	m.Protection.RuntimeTableEntries = 6
+	m.Report.LazyCoveragePercent = 75
+	if err := ValidateManifestRuntimeTableProfile(m); err == nil {
+		t.Fatalf("expected lazy coverage mismatch")
 	}
 }
 

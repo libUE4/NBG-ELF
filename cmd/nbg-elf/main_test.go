@@ -281,9 +281,13 @@ func TestBuildAuditSummaryGradesCommercialReadyManifest(t *testing.T) {
 		Protection: elfstr.ProtectionProfile{
 			RuntimeSelfCheck:       true,
 			ControlFlow:            "opaque-branches-per-entry-loop; runtime-state-dispatch; aarch64-callsite-lazy-decrypt",
+			RuntimeTableEntries:    6,
+			DecoyCount:             2,
+			DecoyRatio:             0.3333333333333333,
 			CallsiteMode:           "aarch64-lazy-decrypt-patch",
 			CallsiteLazySelected:   2,
 			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
 		},
 	}
 	summary := buildAuditSummary(audit, m)
@@ -308,6 +312,8 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 		Protection: elfstr.ProtectionProfile{
 			RuntimeSelfCheck:       true,
 			RuntimeTable:           "encrypted-per-entry-row-resealed",
+			RuntimeTableEntries:    2,
+			DecoyCount:             1,
 			PlaintextAudit:         "protected-entry-residue-scan-before-write",
 			AntiDebug:              "ptrace",
 			AntiFrida:              "maps",
@@ -315,15 +321,51 @@ func TestAuditCapabilitiesReportsCommercialFeatures(t *testing.T) {
 			CallsiteMode:           "aarch64-lazy-decrypt-patch",
 			CallsiteLazySelected:   1,
 			CallsiteLazyCandidates: 1,
+			CallsiteLazyCoverage:   100,
 		},
+		EntryCount: 1,
 	}
 	got := auditCapabilities(m)
-	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDispatch || !got.RuntimePayload || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
+	if !got.RuntimeSelfCheck || !got.RuntimeTableAudit || !got.RuntimeDecoys || !got.RuntimeDispatch || !got.LazyCoverage || !got.RuntimePayload || !got.InputSealed || !got.PlaintextAudit || !got.SectionStripped || !got.AntiDebug || !got.AntiFrida || !got.ManifestSealed || !got.Watermarked {
 		t.Fatalf("capabilities = %+v", got)
 	}
 	m.Options.KeepSections = true
 	if auditCapabilities(m).SectionStripped {
 		t.Fatalf("section_stripped should be false when keep_sections is set")
+	}
+}
+
+func TestBuildAuditSummaryRequiresRuntimeTableEvidenceForCommercialReady(t *testing.T) {
+	audit := manifestAudit{
+		Checks: []auditCheck{
+			{Name: "manifest_sha256", Status: "ok"},
+			{Name: "runtime_stub", Status: "ok"},
+			{Name: "input_sha256", Status: "ok"},
+			{Name: "runtime_payload", Status: "ok"},
+			{Name: "output_sha256", Status: "ok"},
+			{Name: "output_structure", Status: "ok"},
+			{Name: "plaintext_slots", Status: "ok"},
+			{Name: "runtime_table", Status: "ok"},
+			{Name: "runtime_dispatch", Status: "ok"},
+		},
+	}
+	m := &elfstr.Manifest{
+		EntryCount: 4,
+		Report: elfstr.ProtectionReport{
+			Preset: elfstr.PresetAggressive,
+		},
+		Protection: elfstr.ProtectionProfile{
+			RuntimeSelfCheck:       true,
+			ControlFlow:            "runtime-state-dispatch",
+			CallsiteMode:           "aarch64-lazy-decrypt-patch",
+			CallsiteLazySelected:   2,
+			CallsiteLazyCandidates: 2,
+			CallsiteLazyCoverage:   100,
+		},
+	}
+	summary := buildAuditSummary(audit, m)
+	if summary.Grade == "commercial-ready" {
+		t.Fatalf("summary without decoy evidence should not be commercial-ready: %+v", summary)
 	}
 }
 
@@ -419,15 +461,19 @@ func TestAuditGradeRankOrdering(t *testing.T) {
 
 func TestProtectionReportJSONFieldNames(t *testing.T) {
 	report := elfstr.ProtectionReport{
-		Preset:             elfstr.PresetBalanced,
-		ControlFlowLevel:   2,
-		FailurePolicy:      "safe-exit",
-		Strings:            3,
-		Bytes:              42,
-		CallsiteCandidates: 5,
-		CallsiteSelected:   2,
-		CallsiteSkipped:    3,
-		CallsiteMode:       "aarch64-lazy-dry-run-no-patch",
+		Preset:              elfstr.PresetBalanced,
+		ControlFlowLevel:    2,
+		FailurePolicy:       "safe-exit",
+		Strings:             3,
+		Bytes:               42,
+		RuntimeTableEntries: 5,
+		RuntimeDecoys:       2,
+		RuntimeDecoyRatio:   0.4,
+		LazyCoveragePercent: 40,
+		CallsiteCandidates:  5,
+		CallsiteSelected:    2,
+		CallsiteSkipped:     3,
+		CallsiteMode:        "aarch64-lazy-dry-run-no-patch",
 	}
 	raw, err := json.Marshal(report)
 	if err != nil {
@@ -437,7 +483,7 @@ func TestProtectionReportJSONFieldNames(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal report: %v", err)
 	}
-	for _, key := range []string{"preset", "control_flow_level", "failure_policy", "strings", "bytes", "callsite_candidates", "callsite_selected", "callsite_skipped", "callsite_mode"} {
+	for _, key := range []string{"preset", "control_flow_level", "failure_policy", "strings", "bytes", "runtime_table_entries", "runtime_decoys", "runtime_decoy_ratio", "lazy_coverage_percent", "callsite_candidates", "callsite_selected", "callsite_skipped", "callsite_mode"} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("report json missing %s: %s", key, raw)
 		}

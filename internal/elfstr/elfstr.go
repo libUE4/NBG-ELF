@@ -108,7 +108,9 @@ type ProtectionProfile struct {
 	KeyMaterial            string   `json:"key_material"`
 	RuntimeTable           string   `json:"runtime_table"`
 	TableOrder             string   `json:"table_order"`
+	RuntimeTableEntries    int      `json:"runtime_table_entries,omitempty"`
 	DecoyCount             int      `json:"decoy_count,omitempty"`
+	DecoyRatio             float64  `json:"decoy_ratio,omitempty"`
 	EntryEncoding          string   `json:"entry_encoding,omitempty"`
 	RuntimeSelfCheck       bool     `json:"runtime_self_check"`
 	AntiDebug              string   `json:"anti_debug,omitempty"`
@@ -122,6 +124,7 @@ type ProtectionProfile struct {
 	CallsiteMode           string   `json:"callsite_mode,omitempty"`
 	CallsiteLazyCandidates int      `json:"callsite_lazy_candidates"`
 	CallsiteLazySelected   int      `json:"callsite_lazy_selected,omitempty"`
+	CallsiteLazyCoverage   int      `json:"callsite_lazy_coverage,omitempty"`
 	CallsiteLazyHashes     []string `json:"callsite_lazy_hashes,omitempty"`
 }
 
@@ -307,22 +310,29 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if opts.SafeScan {
 		controlFlow += "; safe-scan-test"
 	}
+	runtimeTableEntries := len(runtimeEntries)
+	decoyRatio := runtimeDecoyRatio(decoyCount, runtimeTableEntries)
+	lazyCoverage := callsiteCoveragePercent(callsiteSelected, len(callsiteCandidates))
 	runtimeTable := "encrypted-per-entry-row-resealed"
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
 		runtimeTable += "; lazy-dispatch-table-randomized"
 	}
 	report := ProtectionReport{
-		Preset:             effectivePreset(opts.Preset),
-		ControlFlowLevel:   controlFlowLevel,
-		FailurePolicy:      effectiveFailurePolicy(opts.FailurePolicy),
-		Strings:            len(manifestEntries),
-		Bytes:              total,
-		CallsiteCandidates: len(callsiteCandidates),
-		CallsiteSelected:   callsiteSelected,
-		CallsiteSkipped:    len(callsiteCandidates) - callsiteSelected,
-		CallsiteMode:       callsiteMode,
-		CallsiteLimit:      opts.LazyCallsiteLimit,
-		Warnings:           protectionWarnings(opts, len(callsiteCandidates), callsiteSelected),
+		Preset:              effectivePreset(opts.Preset),
+		ControlFlowLevel:    controlFlowLevel,
+		FailurePolicy:       effectiveFailurePolicy(opts.FailurePolicy),
+		Strings:             len(manifestEntries),
+		Bytes:               total,
+		RuntimeTableEntries: runtimeTableEntries,
+		RuntimeDecoys:       decoyCount,
+		RuntimeDecoyRatio:   decoyRatio,
+		LazyCoveragePercent: lazyCoverage,
+		CallsiteCandidates:  len(callsiteCandidates),
+		CallsiteSelected:    callsiteSelected,
+		CallsiteSkipped:     len(callsiteCandidates) - callsiteSelected,
+		CallsiteMode:        callsiteMode,
+		CallsiteLimit:       opts.LazyCallsiteLimit,
+		Warnings:            protectionWarnings(opts, len(callsiteCandidates), callsiteSelected),
 	}
 	cfg := ProtectionConfig{
 		Preset:             report.Preset,
@@ -367,7 +377,9 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			KeyMaterial:            "dual-arx-xorshift-split-runtime-seed-uint32-per-entry-salt-va-pos-row-tag",
 			RuntimeTable:           runtimeTable,
 			TableOrder:             "per-build-stage-shuffle-random-decoy-clusters-full-table-shuffle",
+			RuntimeTableEntries:    runtimeTableEntries,
 			DecoyCount:             decoyCount,
+			DecoyRatio:             decoyRatio,
 			EntryEncoding:          "tagged-dual-layer-xorshift-arx-per-entry-salt-variant-va-pos-cfg",
 			RuntimeSelfCheck:       true,
 			AntiDebug:              "prctl-dumpable-off; ptrace-traceme-best-effort; tracerpid-status-probe",
@@ -378,6 +390,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 			CallsiteMode:           callsiteMode,
 			CallsiteLazyCandidates: len(callsiteCandidates),
 			CallsiteLazySelected:   callsiteSelected,
+			CallsiteLazyCoverage:   lazyCoverage,
 			CallsiteLazyHashes:     lazyHashes,
 			MemoryWindow:           "entry-row-resealed; seeds-wiped; procfs-scratch-wiped; pages-rx-restored; failure-policy-safe-exit",
 			PageRestore:            true,
@@ -568,12 +581,46 @@ func ValidateManifestRuntimeStub(m *Manifest) error {
 }
 
 func ValidateManifestRuntimeTable(m *Manifest, outputPath string) error {
+	if err := ValidateManifestRuntimeTableProfile(m); err != nil {
+		return err
+	}
 	outputRaw, err := os.ReadFile(outputPath)
 	if err != nil {
 		return err
 	}
 	expectedEntries := m.EntryCount + m.Protection.DecoyCount
 	return validateInjectedOutputRuntimeTable(outputRaw, expectedEntries)
+}
+
+func ValidateManifestRuntimeTableProfile(m *Manifest) error {
+	if m.EntryCount < 0 || m.Protection.DecoyCount < 0 || m.Protection.RuntimeTableEntries < 0 {
+		return fmt.Errorf("runtime table profile contains negative counts")
+	}
+	expectedEntries := m.EntryCount + m.Protection.DecoyCount
+	if m.Protection.RuntimeTableEntries != expectedEntries {
+		return fmt.Errorf("runtime table entries got %d want %d", m.Protection.RuntimeTableEntries, expectedEntries)
+	}
+	if m.Report.RuntimeTableEntries != 0 && m.Report.RuntimeTableEntries != m.Protection.RuntimeTableEntries {
+		return fmt.Errorf("report runtime table entries got %d want %d", m.Report.RuntimeTableEntries, m.Protection.RuntimeTableEntries)
+	}
+	if m.Report.RuntimeDecoys != 0 && m.Report.RuntimeDecoys != m.Protection.DecoyCount {
+		return fmt.Errorf("report runtime decoys got %d want %d", m.Report.RuntimeDecoys, m.Protection.DecoyCount)
+	}
+	wantRatio := runtimeDecoyRatio(m.Protection.DecoyCount, m.Protection.RuntimeTableEntries)
+	if !sameRoundedRatio(m.Protection.DecoyRatio, wantRatio) {
+		return fmt.Errorf("runtime decoy ratio got %.6f want %.6f", m.Protection.DecoyRatio, wantRatio)
+	}
+	if m.Report.RuntimeDecoyRatio != 0 && !sameRoundedRatio(m.Report.RuntimeDecoyRatio, wantRatio) {
+		return fmt.Errorf("report runtime decoy ratio got %.6f want %.6f", m.Report.RuntimeDecoyRatio, wantRatio)
+	}
+	wantCoverage := callsiteCoveragePercent(m.Protection.CallsiteLazySelected, m.Protection.CallsiteLazyCandidates)
+	if m.Protection.CallsiteLazyCoverage != wantCoverage {
+		return fmt.Errorf("lazy callsite coverage got %d want %d", m.Protection.CallsiteLazyCoverage, wantCoverage)
+	}
+	if m.Report.LazyCoveragePercent != 0 && m.Report.LazyCoveragePercent != wantCoverage {
+		return fmt.Errorf("report lazy coverage got %d want %d", m.Report.LazyCoveragePercent, wantCoverage)
+	}
+	return nil
 }
 
 func ValidateManifestRuntimePayloadBytes(m *Manifest, outputRaw []byte) error {
@@ -907,6 +954,29 @@ func hashWatermark(buildID, watermark string) string {
 	}
 	sum := sha256.Sum256([]byte(buildID + "\x00" + watermark))
 	return hex.EncodeToString(sum[:])
+}
+
+func runtimeDecoyRatio(decoys, total int) float64 {
+	if decoys <= 0 || total <= 0 {
+		return 0
+	}
+	return float64(decoys) / float64(total)
+}
+
+func callsiteCoveragePercent(selected, candidates int) int {
+	if selected <= 0 || candidates <= 0 {
+		return 0
+	}
+	return selected * 100 / candidates
+}
+
+func sameRoundedRatio(got, want float64) bool {
+	const epsilon = 0.000001
+	delta := got - want
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= epsilon
 }
 
 func isASCIIPrintable(b byte) bool {

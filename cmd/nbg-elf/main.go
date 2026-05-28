@@ -191,6 +191,7 @@ func printProtectionReport(report *elfstr.ProtectionReport) {
 	fmt.Printf("控制流等级: %d\n", report.ControlFlowLevel)
 	fmt.Printf("失败策略: %s\n", report.FailurePolicy)
 	fmt.Printf("字符串: %d (%d 字节)\n", report.Strings, report.Bytes)
+	fmt.Printf("运行时表: 条目=%d decoy=%d ratio=%.2f lazy覆盖=%d%%\n", report.RuntimeTableEntries, report.RuntimeDecoys, report.RuntimeDecoyRatio, report.LazyCoveragePercent)
 	fmt.Printf("调用点: 候选=%d 选中=%d 跳过=%d 模式=%s\n", report.CallsiteCandidates, report.CallsiteSelected, report.CallsiteSkipped, report.CallsiteMode)
 	for _, warning := range report.Warnings {
 		fmt.Printf("警告: %s\n", warning)
@@ -245,7 +246,9 @@ type auditArtifact struct {
 type auditFeatures struct {
 	RuntimeSelfCheck  bool `json:"runtime_self_check"`
 	RuntimeTableAudit bool `json:"runtime_table_audit"`
+	RuntimeDecoys     bool `json:"runtime_decoys"`
 	RuntimeDispatch   bool `json:"runtime_dispatch"`
+	LazyCoverage      bool `json:"lazy_coverage"`
 	RuntimePayload    bool `json:"runtime_payload_sealed"`
 	InputSealed       bool `json:"input_sealed"`
 	PlaintextAudit    bool `json:"plaintext_audit"`
@@ -388,7 +391,9 @@ func auditCapabilities(m *elfstr.Manifest) auditFeatures {
 	return auditFeatures{
 		RuntimeSelfCheck:  m.Protection.RuntimeSelfCheck,
 		RuntimeTableAudit: m.Protection.RuntimeTable != "",
+		RuntimeDecoys:     m.Protection.DecoyCount > 0 && m.Protection.RuntimeTableEntries > m.EntryCount,
 		RuntimeDispatch:   elfstr.ManifestRequiresRuntimeDispatchAudit(m),
+		LazyCoverage:      m.Protection.CallsiteLazyCoverage > 0,
 		RuntimePayload:    m.RuntimePayload.SHA256 != "",
 		InputSealed:       m.InputSHA256 != "",
 		PlaintextAudit:    m.Protection.PlaintextAudit != "",
@@ -454,6 +459,15 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 		score -= 8
 		recommendations = append(recommendations, "runtime state dispatch not enabled")
 	}
+	expectedTableEntries := m.EntryCount + m.Protection.DecoyCount
+	if m.Protection.DecoyCount == 0 || m.Protection.RuntimeTableEntries != expectedTableEntries {
+		score -= 10
+		recommendations = append(recommendations, "runtime table decoy accounting is incomplete")
+	}
+	if m.Report.Preset == elfstr.PresetAggressive && m.Protection.DecoyRatio < 0.05 {
+		score -= 5
+		recommendations = append(recommendations, "aggressive preset should include measurable runtime table decoys")
+	}
 	if m.Protection.CallsiteMode == "aarch64-lazy-decrypt-patch" && m.Protection.CallsiteLazySelected > 0 {
 		score += 5
 	} else if strings.Contains(m.Protection.CallsiteMode, "dry-run") {
@@ -462,7 +476,10 @@ func buildAuditSummary(audit manifestAudit, m *elfstr.Manifest) auditSummary {
 	}
 	strongMode := m.Report.Preset == elfstr.PresetAggressive &&
 		m.Protection.CallsiteMode == "aarch64-lazy-decrypt-patch" &&
-		m.Protection.CallsiteLazySelected > 0
+		m.Protection.CallsiteLazySelected > 0 &&
+		m.Protection.CallsiteLazyCoverage > 0 &&
+		m.Protection.DecoyCount > 0 &&
+		m.Protection.RuntimeTableEntries == expectedTableEntries
 	if !strongMode {
 		recommendations = append(recommendations, "aggressive preset with patched lazy callsites is required for commercial-ready grade")
 	}
@@ -514,6 +531,7 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	fmt.Printf("条目: %d (%d 字节)\n", m.EntryCount, m.EncryptedSize)
 	if m.Report.Preset != "" {
 		fmt.Printf("保护预设: %s 控制流等级=%d 失败策略=%s\n", m.Report.Preset, m.Report.ControlFlowLevel, m.Report.FailurePolicy)
+		fmt.Printf("报告_运行时表: 条目=%d decoy=%d ratio=%.2f lazy覆盖=%d%%\n", m.Report.RuntimeTableEntries, m.Report.RuntimeDecoys, m.Report.RuntimeDecoyRatio, m.Report.LazyCoveragePercent)
 		fmt.Printf("报告_调用点: 候选=%d 选中=%d 跳过=%d 模式=%s\n", m.Report.CallsiteCandidates, m.Report.CallsiteSelected, m.Report.CallsiteSkipped, m.Report.CallsiteMode)
 	}
 	fmt.Printf("选项: keep_sections=%v safe_scan=%v lazy_callsite=%v lazy_dry_run=%v lazy_limit=%d no_anti_frida_extra=%v manifest_detail=%v\n", m.Options.KeepSections, m.Options.SafeScan, m.Options.LazyCallsite, m.Options.LazyCallsiteDryRun, m.Options.LazyCallsiteLimit, m.Options.NoAntiFridaExtra, m.Options.ManifestDetail)
@@ -524,6 +542,7 @@ func printManifestAudit(audit manifestAudit, m *elfstr.Manifest) {
 	if m.Protection.Honeypot != "" {
 		fmt.Printf("诱饵: %s\n", m.Protection.Honeypot)
 	}
+	fmt.Printf("运行时表: 条目=%d decoy=%d ratio=%.2f\n", m.Protection.RuntimeTableEntries, m.Protection.DecoyCount, m.Protection.DecoyRatio)
 	fmt.Printf("调用点: 候选=%d 选中=%d 模式=%s\n", m.Protection.CallsiteLazyCandidates, m.Protection.CallsiteLazySelected, m.Protection.CallsiteMode)
 	if m.RuntimeStub.SHA256 != "" {
 		fmt.Printf("运行时_stub: 大小=%d sha256=%s entry_off=0x%x lazy_entry_off=0x%x honeypot_off=0x%x\n", m.RuntimeStub.Size, m.RuntimeStub.SHA256, m.RuntimeStub.EntryOff, m.RuntimeStub.LazyEntryOff, m.RuntimeStub.HoneypotOff)

@@ -39,17 +39,21 @@ type protectionConfigJSON struct {
 }
 
 type ProtectionReport struct {
-	Preset             string   `json:"preset"`
-	ControlFlowLevel   int      `json:"control_flow_level"`
-	FailurePolicy      string   `json:"failure_policy"`
-	Strings            int      `json:"strings"`
-	Bytes              int      `json:"bytes"`
-	CallsiteCandidates int      `json:"callsite_candidates"`
-	CallsiteSelected   int      `json:"callsite_selected"`
-	CallsiteSkipped    int      `json:"callsite_skipped"`
-	CallsiteMode       string   `json:"callsite_mode"`
-	CallsiteLimit      int      `json:"callsite_limit,omitempty"`
-	Warnings           []string `json:"warnings,omitempty"`
+	Preset              string   `json:"preset"`
+	ControlFlowLevel    int      `json:"control_flow_level"`
+	FailurePolicy       string   `json:"failure_policy"`
+	Strings             int      `json:"strings"`
+	Bytes               int      `json:"bytes"`
+	RuntimeTableEntries int      `json:"runtime_table_entries"`
+	RuntimeDecoys       int      `json:"runtime_decoys"`
+	RuntimeDecoyRatio   float64  `json:"runtime_decoy_ratio"`
+	LazyCoveragePercent int      `json:"lazy_coverage_percent,omitempty"`
+	CallsiteCandidates  int      `json:"callsite_candidates"`
+	CallsiteSelected    int      `json:"callsite_selected"`
+	CallsiteSkipped     int      `json:"callsite_skipped"`
+	CallsiteMode        string   `json:"callsite_mode"`
+	CallsiteLimit       int      `json:"callsite_limit,omitempty"`
+	Warnings            []string `json:"warnings,omitempty"`
 }
 
 func DefaultProtectionConfig(preset string) (ProtectionConfig, error) {
@@ -190,7 +194,7 @@ func PlanProtectionBytes(raw []byte, opts Options) (*ProtectionReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtimeEntries, _, err := prepareRuntimeTableEntries(entries)
+	runtimeEntries, decoyCount, err := prepareRuntimeTableEntries(entries)
 	if err != nil {
 		return nil, err
 	}
@@ -205,23 +209,28 @@ func PlanProtectionBytes(raw []byte, opts Options) (*ProtectionReport, error) {
 		return nil, err
 	}
 	selected := len(selectedCandidates)
+	lazyCoverage := callsiteCoveragePercent(selected, len(callsiteCandidates))
 	total := 0
 	for _, e := range manifestEntries {
 		total += e.Length
 	}
 	warnings := protectionWarnings(opts, len(callsiteCandidates), selected)
 	return &ProtectionReport{
-		Preset:             effectivePreset(opts.Preset),
-		ControlFlowLevel:   effectiveControlFlowLevel(opts.ControlFlowLevel),
-		FailurePolicy:      effectiveFailurePolicy(opts.FailurePolicy),
-		Strings:            len(manifestEntries),
-		Bytes:              total,
-		CallsiteCandidates: len(callsiteCandidates),
-		CallsiteSelected:   selected,
-		CallsiteSkipped:    len(callsiteCandidates) - selected,
-		CallsiteMode:       mode,
-		CallsiteLimit:      opts.LazyCallsiteLimit,
-		Warnings:           warnings,
+		Preset:              effectivePreset(opts.Preset),
+		ControlFlowLevel:    effectiveControlFlowLevel(opts.ControlFlowLevel),
+		FailurePolicy:       effectiveFailurePolicy(opts.FailurePolicy),
+		Strings:             len(manifestEntries),
+		Bytes:               total,
+		RuntimeTableEntries: len(runtimeEntries),
+		RuntimeDecoys:       decoyCount,
+		RuntimeDecoyRatio:   runtimeDecoyRatio(decoyCount, len(runtimeEntries)),
+		LazyCoveragePercent: lazyCoverage,
+		CallsiteCandidates:  len(callsiteCandidates),
+		CallsiteSelected:    selected,
+		CallsiteSkipped:     len(callsiteCandidates) - selected,
+		CallsiteMode:        mode,
+		CallsiteLimit:       opts.LazyCallsiteLimit,
+		Warnings:            warnings,
 	}, nil
 }
 
