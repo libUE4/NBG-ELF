@@ -1017,6 +1017,9 @@ func TestEmbeddedRuntimeStubOffsetsAreInBounds(t *testing.T) {
 		{"static_va", stubStaticVAOff, 8},
 		{"orig_entry", stubOrigEntryOff, 8},
 		{"payload_len", stubPayloadLenOff, 8},
+		{"runtime_table_hash", stubRuntimeTableHashOff, 4},
+		{"runtime_table_hash_seed", stubRuntimeTableSeedOff, 4},
+		{"runtime_table_hash_mask", stubRuntimeTableMaskOff, 4},
 		{"table", stubTableOff, stubTableEntSize},
 		{"lazy_count", stubLazyCountOff, 4},
 		{"lazy_hash", stubLazyHashOff, 4},
@@ -1034,6 +1037,15 @@ func TestEmbeddedRuntimeStubOffsetsAreInBounds(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyCountOff:]); got != 0x01234567 {
 		t.Fatalf("lazy count placeholder mismatch at %#x: got %#x", stubLazyCountOff, got)
+	}
+	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableHashOff:]); got != stubRuntimeTableHash {
+		t.Fatalf("runtime table hash placeholder mismatch at %#x: got %#x", stubRuntimeTableHashOff, got)
+	}
+	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableSeedOff:]); got != stubRuntimeTableSeed {
+		t.Fatalf("runtime table hash seed placeholder mismatch at %#x: got %#x", stubRuntimeTableSeedOff, got)
+	}
+	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableMaskOff:]); got != stubRuntimeTableMask {
+		t.Fatalf("runtime table hash mask placeholder mismatch at %#x: got %#x", stubRuntimeTableMaskOff, got)
 	}
 	if got := binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyHashOff:]); got != stubLazyHashPlaceholder {
 		t.Fatalf("lazy hash placeholder mismatch at %#x: got %#x", stubLazyHashOff, got)
@@ -1298,6 +1310,9 @@ func TestStubSymbolOffsetsMatchRuntimeConstants(t *testing.T) {
 		{"strdec_param_string_index", stubParamStringIndexOff},
 		{"strdec_guard_hash", stubGuardHashOff},
 		{"strdec_orig_entry_key", stubOrigEntryKeyOff},
+		{"strdec_runtime_table_hash", stubRuntimeTableHashOff},
+		{"strdec_runtime_table_hash_seed", stubRuntimeTableSeedOff},
+		{"strdec_runtime_table_hash_mask", stubRuntimeTableMaskOff},
 		{"strdec_table", stubTableOff},
 		{"strdec_lazy_count", stubLazyCountOff},
 		{"strdec_lazy_hash", stubLazyHashOff},
@@ -1405,6 +1420,25 @@ func TestValidateInjectedOutputCatchesCorruption(t *testing.T) {
 	binary.LittleEndian.PutUint32(payloadRaw[stubEntryCountOff:], 2)
 	if err := validateInjectedOutputRuntimeTable(corruptTable, expectedEntries); err == nil {
 		t.Fatalf("validate runtime table accepted corrupt entry count")
+	}
+	corruptTableHash := append([]byte(nil), out...)
+	_, payloadRaw, _, err = findRuntimePayload(corruptTableHash)
+	if err != nil {
+		t.Fatalf("find runtime payload for table hash corruption: %v", err)
+	}
+	tableOff := alignUp(uint64(stubDataEndOff), 16)
+	payloadRaw[tableOff] ^= 0xff
+	if err := validateInjectedOutputRuntimeTable(corruptTableHash, expectedEntries); err == nil {
+		t.Fatalf("validate runtime table accepted corrupt encoded table")
+	}
+	corruptTableSeed := append([]byte(nil), out...)
+	_, payloadRaw, _, err = findRuntimePayload(corruptTableSeed)
+	if err != nil {
+		t.Fatalf("find runtime payload for table seed corruption: %v", err)
+	}
+	binary.LittleEndian.PutUint32(payloadRaw[stubRuntimeTableSeedOff:], 0)
+	if err := validateInjectedOutputRuntimeTable(corruptTableSeed, expectedEntries); err == nil {
+		t.Fatalf("validate runtime table accepted missing hash seed")
 	}
 }
 

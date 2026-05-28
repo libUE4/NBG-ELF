@@ -188,6 +188,14 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	if err != nil {
 		return nil, err
 	}
+	meta.RuntimeTableSeed, err = randomUint32()
+	if err != nil {
+		return nil, err
+	}
+	meta.RuntimeTableMask, err = randomUint32()
+	if err != nil {
+		return nil, err
+	}
 	meta.LazyHashSeed, err = randomUint32()
 	if err != nil {
 		return nil, err
@@ -334,7 +342,7 @@ func EncryptFile(inputPath, outputPath, manifestPath string, opts Options) (*Man
 	runtimeTableEntries := len(runtimeEntries)
 	decoyRatio := runtimeDecoyRatio(decoyCount, runtimeTableEntries)
 	lazyCoverage := callsiteCoveragePercent(callsiteSelected, len(callsiteCandidates))
-	runtimeTable := "encrypted-per-entry-row-resealed"
+	runtimeTable := "encrypted-per-entry-row-resealed; runtime-table-keyed-hash"
 	if callsiteMode == callsiteModeAArch64LazyDecrypt {
 		runtimeTable += "; lazy-dispatch-table-randomized; lazy-dispatch-table-encoded; lazy-dispatch-table-keyed-hash; lazy-dispatch-mask-randomized"
 	}

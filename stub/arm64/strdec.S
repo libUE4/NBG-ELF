@@ -844,6 +844,42 @@ strdec_entry:
     movk w9, #0xa5c3, lsl #16
     eor w21, w21, w9
 
+    adr x20, strdec_runtime_table_hash
+    ldr w17, [x20]
+    adr x20, strdec_runtime_table_hash_mask
+    ldr w9, [x20]
+    eor w17, w17, w9
+    adr x20, strdec_runtime_table_hash_seed
+    ldr w9, [x20]
+    mov w27, w24
+    eor w27, w27, w9
+    str w9, [sp, #248]
+    mov w3, #0
+    mov w28, w24
+    mov w9, #24
+    mul w28, w28, w9
+.Lruntime_table_hash_loop:
+    cmp w3, w28
+    b.hs .Lruntime_table_hash_done
+    ldrb w4, [x25, x3]
+    mov w5, #0x352d
+    movk w5, #0x7feb, lsl #16
+    madd w5, w3, w5, w4
+    add w27, w27, w5
+    eor w27, w27, w27, lsl #7
+    eor w27, w27, w27, lsr #15
+    eor w27, w27, w27, lsl #11
+    add w3, w3, #1
+    b .Lruntime_table_hash_loop
+.Lruntime_table_hash_done:
+    cbnz w27, .Lruntime_table_hash_nonzero
+    ldr w27, [sp, #248]
+.Lruntime_table_hash_nonzero:
+    cmp w27, w17
+    b.eq .Lruntime_table_hash_ok
+    brk #0x7c3
+.Lruntime_table_hash_ok:
+
     adr x20, strdec_key_seed
     ldr w23, [x20]
     str wzr, [x20]
@@ -1704,6 +1740,13 @@ strdec_guard_hash:
 .balign 8
 strdec_orig_entry_key:
     .quad 0x0d8f64b3e27a951c
+strdec_runtime_table_hash:
+    .word 0x13579bdf
+strdec_runtime_table_hash_seed:
+    .word 0x2468ace1
+strdec_runtime_table_hash_mask:
+    .word 0xf0e1d2c3
+.balign 8
 strdec_table:
     .quad 0x9364d2b80f5ace17
     .quad 0x48c1a7e53b9d026f

@@ -13,39 +13,45 @@ import (
 
 const (
 	stubEntryOff            = 0x50
-	stubLazyEntryOff        = 0x1068
-	stubHoneypotEntryOff    = 0x162c
-	stubAnchorOff           = 0x16c8
-	stubStaticVAOff         = 0x16d0
-	stubOrigEntryOff        = 0x16d8
-	stubPageVAOff           = 0x16e0
-	stubPageLenOff          = 0x16e8
-	stubPayloadLenOff       = 0x16f0
-	stubEntryCountOff       = 0x16f8
-	stubGuardSeedOff        = 0x16fc
-	stubTableSeedOff        = 0x1700
-	stubKeySeedOff          = 0x1704
-	stubParamTableAOff      = 0x1708
-	stubParamTableBOff      = 0x170c
-	stubParamKeyIndexOff    = 0x1710
-	stubParamStringPosOff   = 0x1714
-	stubParamStringIndexOff = 0x1718
-	stubGuardHashOff        = 0x171c
-	stubOrigEntryKeyOff     = 0x1720
-	stubTableOff            = 0x1728
+	stubLazyEntryOff        = 0x10e4
+	stubHoneypotEntryOff    = 0x16a8
+	stubAnchorOff           = 0x1748
+	stubStaticVAOff         = 0x1750
+	stubOrigEntryOff        = 0x1758
+	stubPageVAOff           = 0x1760
+	stubPageLenOff          = 0x1768
+	stubPayloadLenOff       = 0x1770
+	stubEntryCountOff       = 0x1778
+	stubGuardSeedOff        = 0x177c
+	stubTableSeedOff        = 0x1780
+	stubKeySeedOff          = 0x1784
+	stubParamTableAOff      = 0x1788
+	stubParamTableBOff      = 0x178c
+	stubParamKeyIndexOff    = 0x1790
+	stubParamStringPosOff   = 0x1794
+	stubParamStringIndexOff = 0x1798
+	stubGuardHashOff        = 0x179c
+	stubOrigEntryKeyOff     = 0x17a0
+	stubRuntimeTableHashOff = 0x17a8
+	stubRuntimeTableSeedOff = 0x17ac
+	stubRuntimeTableMaskOff = 0x17b0
+	stubTableOff            = 0x17b8
 	stubTableEntSize        = 24
-	stubLazyCountOff        = 0x1740
-	stubLazyHashOff         = 0x1744
-	stubLazyHashSeedOff     = 0x1748
-	stubLazyHashMaskOff     = 0x174c
-	stubLazyMaskIndexMulOff = 0x1750
-	stubLazyMaskPosMulOff   = 0x1754
-	stubLazyMaskBaseOff     = 0x1758
-	stubLazyMaskRoundMulOff = 0x175c
-	stubLazyTableOff        = 0x1760
+	stubLazyCountOff        = 0x17d0
+	stubLazyHashOff         = 0x17d4
+	stubLazyHashSeedOff     = 0x17d8
+	stubLazyHashMaskOff     = 0x17dc
+	stubLazyMaskIndexMulOff = 0x17e0
+	stubLazyMaskPosMulOff   = 0x17e4
+	stubLazyMaskBaseOff     = 0x17e8
+	stubLazyMaskRoundMulOff = 0x17ec
+	stubLazyTableOff        = 0x17f0
 	stubLazyEntSize         = 56
 	stubRuntimeTableADROff  = 0xb98
-	stubDataEndOff          = 0x17b0
+	stubDataEndOff          = 0x1840
+	stubRuntimeTableHash    = 0x13579bdf
+	stubRuntimeTableSeed    = 0x2468ace1
+	stubRuntimeTableMask    = 0xf0e1d2c3
 	stubLazyHashPlaceholder = 0x89abcdef
 	stubLazySeedPlaceholder = 0x6d2b79f5
 	stubLazyMaskPlaceholder = 0xa5c35a7e
@@ -68,6 +74,9 @@ type RuntimeMeta struct {
 	RandomPad        []byte
 	TableSeed        uint32
 	KeySeed          uint32
+	RuntimeTableHash uint32
+	RuntimeTableSeed uint32
+	RuntimeTableMask uint32
 	LazyHashSeed     uint32
 	LazyHashMask     uint32
 	LazyMaskIndexMul uint32
@@ -129,6 +138,18 @@ func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]b
 			return nil, err
 		}
 	}
+	if meta.RuntimeTableSeed == 0 {
+		meta.RuntimeTableSeed, err = randomUint32()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if meta.RuntimeTableMask == 0 {
+		meta.RuntimeTableMask, err = randomUint32()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if meta.LazyHashSeed == 0 {
 		meta.LazyHashSeed, err = randomUint32()
 		if err != nil {
@@ -149,6 +170,7 @@ func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]b
 	}
 	table := buildRuntimeStringTable(entries, meta.KeySeed, meta.ParamKeyIndex)
 	cryptRuntimeTable(table, meta.TableSeed, meta.ParamTableA, meta.ParamTableB)
+	meta.RuntimeTableHash = hashRuntimeStringTable(table, uint32(len(entries)), meta.RuntimeTableSeed)
 	metaBlob := buildRuntimeMeta(meta)
 	tableOff := alignUp(uint64(stubDataEndOff), 16)
 	payload := make([]byte, 0, int(tableOff)+len(table)+len(metaBlob))
@@ -179,6 +201,9 @@ func injectRuntimeDecryptor(data []byte, entries []Entry, meta RuntimeMeta) ([]b
 	binary.LittleEndian.PutUint32(payload[stubEntryCountOff:], uint32(len(entries)))
 	binary.LittleEndian.PutUint32(payload[stubTableSeedOff:], encodeTableSeed(meta.TableSeed))
 	binary.LittleEndian.PutUint32(payload[stubKeySeedOff:], encodeKeySeed(meta.KeySeed))
+	binary.LittleEndian.PutUint32(payload[stubRuntimeTableHashOff:], meta.RuntimeTableHash^meta.RuntimeTableMask)
+	binary.LittleEndian.PutUint32(payload[stubRuntimeTableSeedOff:], meta.RuntimeTableSeed)
+	binary.LittleEndian.PutUint32(payload[stubRuntimeTableMaskOff:], meta.RuntimeTableMask)
 	binary.LittleEndian.PutUint32(payload[stubParamTableAOff:], meta.ParamTableA)
 	binary.LittleEndian.PutUint32(payload[stubParamTableBOff:], meta.ParamTableB)
 	binary.LittleEndian.PutUint32(payload[stubParamKeyIndexOff:], meta.ParamKeyIndex)
@@ -329,10 +354,16 @@ func validateRuntimeTableMetadata(payloadRaw []byte, expectedEntries int) error 
 	if expectedEntries < 0 {
 		return fmt.Errorf("expected runtime entry count must be >= 0")
 	}
-	if len(payloadRaw) <= stubEntryCountOff+4 {
-		return fmt.Errorf("runtime payload too small for entry count")
+	if len(payloadRaw) <= stubEntryCountOff+4 || len(payloadRaw) <= stubRuntimeTableHashOff+4 || len(payloadRaw) <= stubRuntimeTableSeedOff+4 || len(payloadRaw) <= stubRuntimeTableMaskOff+4 {
+		return fmt.Errorf("runtime payload too small for table metadata")
 	}
 	entryCount := binary.LittleEndian.Uint32(payloadRaw[stubEntryCountOff:])
+	tableHashSeed := binary.LittleEndian.Uint32(payloadRaw[stubRuntimeTableSeedOff:])
+	tableHashMask := binary.LittleEndian.Uint32(payloadRaw[stubRuntimeTableMaskOff:])
+	if tableHashSeed == 0 || tableHashMask == 0 {
+		return fmt.Errorf("runtime table hash metadata is invalid")
+	}
+	tableHash := binary.LittleEndian.Uint32(payloadRaw[stubRuntimeTableHashOff:]) ^ tableHashMask
 	if uint64(entryCount) != uint64(expectedEntries) {
 		return fmt.Errorf("runtime entry count got %d want %d", entryCount, expectedEntries)
 	}
@@ -346,6 +377,9 @@ func validateRuntimeTableMetadata(payloadRaw []byte, expectedEntries int) error 
 	}
 	if tableOff > uint64(len(payloadRaw)) || tableLen > uint64(len(payloadRaw))-tableOff {
 		return fmt.Errorf("runtime table outside payload: off=%#x len=%#x filesz=%#x", tableOff, tableLen, len(payloadRaw))
+	}
+	if got := hashRuntimeStringTable(payloadRaw[tableOff:tableOff+tableLen], entryCount, tableHashSeed); got != tableHash {
+		return fmt.Errorf("runtime table hash got %#x want %#x", got, tableHash)
 	}
 	if len(payloadRaw) <= stubRuntimeTableADROff+4 {
 		return fmt.Errorf("runtime payload too small for table ADR")
@@ -499,6 +533,15 @@ func validateEmbeddedStubLayout() error {
 	}
 	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyCountOff:]) != 0x01234567 {
 		return fmt.Errorf("runtime stub lazy count placeholder mismatch at %#x", stubLazyCountOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableHashOff:]) != stubRuntimeTableHash {
+		return fmt.Errorf("runtime stub table hash placeholder mismatch at %#x", stubRuntimeTableHashOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableSeedOff:]) != stubRuntimeTableSeed {
+		return fmt.Errorf("runtime stub table hash seed placeholder mismatch at %#x", stubRuntimeTableSeedOff)
+	}
+	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubRuntimeTableMaskOff:]) != stubRuntimeTableMask {
+		return fmt.Errorf("runtime stub table hash mask placeholder mismatch at %#x", stubRuntimeTableMaskOff)
 	}
 	if binary.LittleEndian.Uint32(assets.StrdecBlob[stubLazyHashOff:]) != stubLazyHashPlaceholder {
 		return fmt.Errorf("runtime stub lazy hash placeholder mismatch at %#x", stubLazyHashOff)
@@ -857,6 +900,20 @@ func cryptRuntimeTable(table []byte, tableSeed, tableA, tableB uint32) {
 		mask += uint32(pos >> 8)
 		table[pos] ^= byte(mask)
 	}
+}
+
+func hashRuntimeStringTable(table []byte, count, seed uint32) uint32 {
+	h := count ^ seed
+	for i, b := range table {
+		h += uint32(b) + uint32(i)*0x7feb352d
+		h ^= h << 7
+		h ^= h >> 15
+		h ^= h << 11
+	}
+	if h == 0 {
+		return seed
+	}
+	return h
 }
 
 func splitRuntimeKey(key uint32, va uint64, length, index, keySeed, keyIndexParam, saltA, saltB uint32, variant uint8) uint32 {
